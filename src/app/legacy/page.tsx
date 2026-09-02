@@ -10,6 +10,14 @@ export const metadata: Metadata = {
     ],
     apple: "/legacy-app/icon-192.png",
   },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "排笛教學管理系統",
+  },
+  other: {
+    "apple-mobile-web-app-capable": "yes",
+  },
 };
 
 export const viewport: Viewport = {
