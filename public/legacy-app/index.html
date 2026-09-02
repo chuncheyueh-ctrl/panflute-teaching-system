@@ -12469,14 +12469,6 @@ async function testCloudConnection(){
   }
 }
 
-function saveGasUrl(){
-  const input = document.getElementById("gasUrlInput");
-  if(!input) return;
-  if(!state.cloudConfig) state.cloudConfig = {};
-  state.cloudConfig.gasUrl = input.value.trim();
-  saveState();
-  alert("Google Apps Script URL 已儲存。");
-}
 
 
 
@@ -13238,22 +13230,6 @@ function sc939SplitTasks(raw){
   return String(raw || "").split(/\n/).map(x=>x.trim()).filter(Boolean);
 }
 
-function sc939TaskItems(){
-  const main = sc939Main();
-  const titles = sc939SplitTasks(main.tasks || "");
-  const mins = Array.isArray(main.taskMinutes) ? main.taskMinutes : [];
-  const fallback = titles.length ? Math.max(1, Math.floor(40/titles.length)) : 10;
-  const items = titles.map((title,idx)=>({
-    title,
-    minutes:Math.max(1, Number(mins[idx] || fallback || 10))
-  }));
-  return items.length ? items : [
-    {title:"暖身", minutes:5},
-    {title:"本週主線", minutes:15},
-    {title:"個別檢查", minutes:15},
-    {title:"收尾回饋", minutes:5}
-  ];
-}
 
 function sc939GrowthTypes(){
   try{
@@ -13298,116 +13274,19 @@ function sc939TimeToMin(t){
   return h*60+m;
 }
 
-function sc939MinToTime(total){
-  total = ((Number(total)||0)+1440)%1440;
-  const h = Math.floor(total/60);
-  const m = total%60;
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-}
 
 function sc939NowMin(){
   const d = new Date();
   return d.getHours()*60+d.getMinutes();
 }
 
-function sc939StartTime(){
-  return localStorage.getItem("battle_start_class_time") || "10:30";
-}
 
-function sc939SetStartTime(v){
-  localStorage.setItem("battle_start_class_time", v || "10:30");
-  renderStartClassMode();
-}
 
-function sc939Ranges(){
-  let cur = sc939TimeToMin(sc939StartTime());
-  return sc939TaskItems().map((item,idx)=>{
-    const start = cur;
-    const minutes = Math.max(1, Number(item.minutes||1));
-    const end = start + minutes;
-    cur = end;
-    return {idx,title:item.title,minutes,start,end};
-  });
-}
 
-function sc939Progress(){
-  const ranges = sc939Ranges();
-  if(!ranges.length) return 0;
-  const start = ranges[0].start;
-  const end = ranges[ranges.length-1].end;
-  const now = sc939NowMin();
-  if(now <= start) return 0;
-  if(now >= end) return 100;
-  return Math.round((now-start)/(end-start)*100);
-}
 
-function sc939ActiveName(){
-  const now = sc939NowMin();
-  const ranges = sc939Ranges();
-  const active = ranges.find(r=>now>=r.start && now<r.end);
-  if(active) return active.title;
-  if(ranges.length && now >= ranges[ranges.length-1].end) return "本堂課已完成";
-  return "尚未開始";
-}
 
-function sc939RenderFlow(){
-  const ranges = sc939Ranges();
-  const now = sc939NowMin();
-  const total = ranges.reduce((s,r)=>s+r.minutes,0);
-  return `
-    <h3>本堂流程</h3>
-    <div class="sc939-time-row">
-      <div>
-        <label>上課開始時間</label>
-        <input type="time" value="${sc939Esc(sc939StartTime())}" onchange="sc939SetStartTime(this.value)">
-      </div>
-      <div>
-        <label>總分鐘</label>
-        <input value="${total}" readonly>
-      </div>
-    </div>
-    <div class="sc939-hint">任務內容與分鐘數請到「課程紀錄／本週主線」編輯；這裡只作為上課時的時間提醒。</div>
-    <div class="sc939-progress-title"><span>現在：${sc939Esc(sc939ActiveName())}</span><span>${sc939Progress()}%</span></div>
-    <div class="sc939-progress"><div class="sc939-progress-fill" style="width:${sc939Progress()}%"></div></div>
-    <div class="sc939-flow">
-      ${ranges.map(r=>{
-        const cls = now>=r.end ? "done" : (now>=r.start && now<r.end ? "active" : "upcoming");
-        return `
-          <div class="sc939-flow-card ${cls}">
-            <span class="sc939-dot"></span>
-            <div>
-              <div class="sc939-flow-title">${sc939Esc(r.title)} <span class="sc939-badge">${r.minutes} 分鐘</span></div>
-              <div class="sc939-flow-time">${sc939MinToTime(r.start)} - ${sc939MinToTime(r.end)}</div>
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
 
-function sc939RenderChecklist(){
-  const items = sc939TaskItems();
-  if(!window.startClassTasks) window.startClassTasks = {};
-  return `
-    <div class="sc939-checklist">
-      <h3>今日課堂完成確認</h3>
-      <div class="sc939-hint">時間軸是提醒進度；這裡才是真實完成紀錄。</div>
-      ${items.map((item,idx)=>`
-        <label class="sc939-check-task">
-          <input type="checkbox" ${window.startClassTasks[`task_${idx}`] ? "checked" : ""} onchange="sc939ToggleTask(${idx},this.checked)">
-          <span>${sc939Esc(item.title)}</span>
-        </label>
-      `).join("")}
-    </div>
-  `;
-}
 
-function sc939ToggleTask(idx,checked){
-  if(!window.startClassTasks) window.startClassTasks = {};
-  window.startClassTasks[`task_${idx}`] = !!checked;
-  try{ if(typeof startClassToggleTask === "function") startClassToggleTask(idx, checked); }catch(e){}
-}
 
 function sc939Photo(st){
   const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
@@ -13756,31 +13635,6 @@ function v940RenderTodayEditor(){
   `;
 }
 
-function v940MountTodayEditor(){
-  if(document.getElementById("v940TaskEditor")) return;
-
-  const candidates = [...document.querySelectorAll("section, .card, .panel, div")];
-  let target = candidates.find(el => 
-    (el.textContent || "").includes("右上（今天課堂）") ||
-    ((el.textContent || "").includes("今天課堂") && (el.textContent || "").includes("儲存今日"))
-  );
-
-  if(!target){
-    const headings = [...document.querySelectorAll("h2,h3")];
-    const h = headings.find(x => (x.textContent || "").includes("右上") || (x.textContent || "").includes("今天課堂"));
-    target = h?.closest(".card,.panel,section,div");
-  }
-
-  if(!target) return;
-
-  const holder = document.createElement("div");
-  holder.innerHTML = v940RenderTodayEditor();
-  target.appendChild(holder);
-
-  const flow = v940GetTodayFlow();
-  flow.tasks.forEach(t=>v940AddTodayRow(t.title, t.minutes));
-  v940UpdatePreview();
-}
 
 const __v940Render = typeof render === "function" ? render : null;
 if(__v940Render){
@@ -13792,24 +13646,8 @@ if(__v940Render){
 }
 
 /* Override Start Class Clean Core task source to read today class flow */
-function sc939TaskItems(){
-  return v940GetTodayFlow().tasks.map(t=>({
-    title:t.title,
-    minutes:Math.max(1,Number(t.minutes||1))
-  }));
-}
 
-function sc939StartTime(){
-  return v940GetTodayFlow().startTime || localStorage.getItem("battle_start_class_time") || "10:30";
-}
 
-function sc939SetStartTime(v){
-  const flow = v940GetTodayFlow();
-  flow.startTime = v || "10:30";
-  localStorage.setItem("battle_start_class_time", flow.startTime);
-  try{ saveState(); }catch(e){}
-  renderStartClassMode();
-}
 
 
 
@@ -13858,40 +13696,6 @@ function v941RemoveDuplicateFlowPanels(){
   });
 }
 
-function v940MountTodayEditor(){
-  if(document.getElementById("v940TaskEditor")){
-    v941RemoveDuplicateFlowPanels();
-    return;
-  }
-
-  const target = v941FindTodayPanel();
-  if(!target) return;
-
-  // Prefer placing after the existing checklist/tasks in today class panel,
-  // but before memo/homework if those exist.
-  const holder = document.createElement("div");
-  holder.innerHTML = v940RenderTodayEditor();
-
-  const allChildren = [...target.children];
-  const insertBefore = allChildren.find(el=>{
-    const t = (el.textContent || "");
-    return t.includes("提醒事項") || t.includes("回家功課") || t.includes("今日課堂備註");
-  });
-
-  if(insertBefore) target.insertBefore(holder, insertBefore);
-  else target.appendChild(holder);
-
-  const flow = v940GetTodayFlow();
-
-  // If no saved today-flow yet, sync from the current today-class checklist/mainline.
-  if(!flow.tasks || !flow.tasks.length){
-    flow.tasks = v940DefaultTasks();
-  }
-
-  flow.tasks.forEach(t=>v940AddTodayRow(t.title, t.minutes));
-  v940UpdatePreview();
-  v941RemoveDuplicateFlowPanels();
-}
 
 const __v941Render = typeof render === "function" ? render : null;
 if(__v941Render){
@@ -13933,11 +13737,8 @@ function v942AddRow(title="新任務",minutes=5,done=false){const wrap=document.
 function v942RenderMergedEditor(){const lesson=v942Lesson();const total=lesson.tasks.reduce((s,t)=>s+(Number(t.minutes)||0),0);const esc=typeof sc939Esc==="function"?sc939Esc:(v=>String(v??""));return `<div class="v940-today-editor v942-merged"><div class="v940-editor-head"><div><div class="v940-editor-title">⏱ 今天課堂流程</div><div class="v940-editor-hint">流程、分鐘數、實際完成勾選都在這裡；開始上課會直接讀取這一套資料。</div></div><button type="button" class="v940-mini-btn" onclick="v942ResetFromWeekly()">從本週主線重建</button></div><div class="v940-time-row"><div><label>上課開始時間</label><input id="v940StartTime" type="time" value="${esc(lesson.startTime||"10:30")}" oninput="v942UpdatePreview()"></div><div><label>總分鐘</label><input id="v940TotalReadonly" value="${total}" readonly></div></div><div class="v940-total"><span>任務／完成／分鐘</span><span id="v940Total">總計 ${total} 分鐘</span></div><div id="v940TaskEditor" class="v940-task-editor"></div><button type="button" class="v940-add" onclick="v942AddRow()">＋ 新增課堂任務</button><div class="v942-textareas"><div><label>提醒事項</label><textarea id="v942Reminder" placeholder="例如：下次先檢查高音 Sol、某某學生要看指法。">${esc(lesson.reminder||"")}</textarea></div><div><label>回家功課</label><textarea id="v942Homework" placeholder="例如：長音4拍每天3次、練習第8-16小節。">${esc(lesson.homework||"")}</textarea></div><div><label>今日課堂補充</label><textarea id="v942Note" placeholder="例如：學生對節奏反應很好，但小組同步還不穩。">${esc(lesson.note||"")}</textarea></div></div><button type="button" class="v940-save" onclick="v942SaveLesson()">儲存今天課堂流程</button></div>`}
 function v942ResetFromWeekly(){const lesson=v942Lesson();const defaults=(typeof v940DefaultTasks==="function"?v940DefaultTasks():v942DefaultLesson().tasks);lesson.tasks=defaults.map(t=>({title:t.title,minutes:Number(t.minutes)||5,done:false}));try{saveState()}catch(e){}try{render()}catch(e){}}
 function v942FindTodayPanel(){const heads=[...document.querySelectorAll("h1,h2,h3,h4,.card-title,.section-title,b,strong")];let h=heads.find(x=>{const t=(x.textContent||"").trim();return (t.includes("右上")&&t.includes("今天課堂"))||t==="今天課堂"||t.includes("今天課堂")});return h?.closest(".card,.panel,section,.course-card,.settings-card,.content-card,div")||null}
-function v942MountMergedEditor(){if(document.querySelector(".v942-merged"))return;document.querySelectorAll(".v940-today-editor").forEach(x=>x.remove());const panel=v942FindTodayPanel();if(!panel)return;const holder=document.createElement("div");holder.innerHTML=v942RenderMergedEditor();const insertBefore=[...panel.children].find(el=>{const t=(el.textContent||"");return t.includes("最近課堂回顧")||t.includes("儲存今日")||t.includes("生成本週")});if(insertBefore)panel.insertBefore(holder,insertBefore);else panel.appendChild(holder);v942Lesson().tasks.forEach(t=>v942AddRow(t.title,t.minutes,t.done));v942UpdatePreview()}
 const __v942Render=typeof render==="function"?render:null;if(__v942Render){render=function(){const result=__v942Render.apply(this,arguments);setTimeout(v942MountMergedEditor,0);return result}}
-function v940MountTodayEditor(){v942MountMergedEditor()}
-function sc939TaskItems(){return v942Lesson().tasks.map(t=>({title:t.title,minutes:Math.max(1,Number(t.minutes||1)),done:!!t.done}))}function sc939StartTime(){return v942Lesson().startTime||localStorage.getItem("battle_start_class_time")||"10:30"}function sc939SetStartTime(v){const lesson=v942Lesson();lesson.startTime=v||"10:30";localStorage.setItem("battle_start_class_time",lesson.startTime);try{saveState()}catch(e){}renderStartClassMode()}
-function sc939ToggleTask(idx,checked){const lesson=v942Lesson();if(lesson.tasks[idx])lesson.tasks[idx].done=!!checked;if(!window.startClassTasks)window.startClassTasks={};window.startClassTasks[`task_${idx}`]=!!checked;try{saveState()}catch(e){}}
+function sc939StartTime(){return v942Lesson().startTime||localStorage.getItem("battle_start_class_time")||"10:30"}function sc939SetStartTime(v){const lesson=v942Lesson();lesson.startTime=v||"10:30";localStorage.setItem("battle_start_class_time",lesson.startTime);try{saveState()}catch(e){}renderStartClassMode()}
 function sc939RenderFlow(){const ranges=sc939Ranges();const now=v942NowMin();const total=ranges.reduce((s,r)=>s+r.minutes,0);const lesson=v942Lesson();const checkedCount=lesson.tasks.filter(t=>t.done).length;const rate=lesson.tasks.length?Math.round(checkedCount/lesson.tasks.length*100):0;return `<h3>本堂流程</h3><div class="sc939-time-row"><div><label>上課開始時間</label><input type="time" value="${sc939Esc(sc939StartTime())}" onchange="sc939SetStartTime(this.value)"></div><div><label>總分鐘</label><input value="${total}" readonly></div></div><div class="sc939-hint">時間軸是提醒進度；每個任務左側勾選才是真實完成紀錄。</div><div class="sc939-progress-title"><span>現在：${sc939Esc(sc939ActiveName())}</span><span>${sc939Progress()}%</span></div><div class="sc939-progress"><div class="sc939-progress-fill" style="width:${sc939Progress()}%"></div></div><div class="sc939-flow">${ranges.map(r=>{const task=lesson.tasks[r.idx]||{};const timeDone=now>=r.end;const active=now>=r.start&&now<r.end;const cls=`${active?"active":""} ${timeDone?"done-time":""} ${task.done?"checked":""}`;return `<div class="v942-start-flow-card ${cls}"><input class="v942-start-check" type="checkbox" ${task.done?"checked":""} onchange="sc939ToggleTask(${r.idx},this.checked);renderStartClassMode()"><div><div class="v942-start-title">${sc939Esc(r.title)} <span class="sc939-badge">${r.minutes} 分鐘</span></div><div class="v942-start-meta">${sc939MinToTime(r.start)} - ${sc939MinToTime(r.end)}｜${task.done?"已完成":"未完成"}</div></div></div>`}).join("")}</div><div class="v942-completion">本堂完成率：${checkedCount}/${lesson.tasks.length}（${rate}%）</div>`}
 function sc939RenderChecklist(){const lesson=v942Lesson();const esc=typeof sc939Esc==="function"?sc939Esc:(v=>String(v??""));return `<div class="v942-note-box">${lesson.reminder?`<div><b>提醒事項</b><div class="note-mini">${esc(lesson.reminder)}</div></div>`:""}${lesson.homework?`<div><b>回家功課</b><div class="note-mini">${esc(lesson.homework)}</div></div>`:""}${lesson.note?`<div><b>今日課堂補充</b><div class="note-mini">${esc(lesson.note)}</div></div>`:""}</div>`}
 
@@ -14056,24 +13857,6 @@ function lessonTimeToMin(t){ const [h,m] = String(t || "10:30").split(":").map(n
 function lessonMinToTime(total){ total = ((Number(total)||0)+1440)%1440; const h = Math.floor(total/60); const m = total%60; return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`; }
 function lessonMountAll(){ const rec = lessonRecord(); lessonRenderWeeklyPlan(rec); lessonRenderTodayFlow(rec); lessonRenderFixedCurriculum(rec); lessonRenderGrowthHighlights(rec); }
 
-function lessonRenderWeeklyPlan(rec){
-  const root = document.getElementById("lessonWeeklyPlanCore"); if(!root) return;
-  const p = rec.weeklyPlan;
-  root.innerHTML = `
-    <div class="lesson-core-field"><label>本週主題</label><input id="lessonWeeklyTitle" value="${lessonEsc(p.title||"")}" placeholder="例如：長音穩定與節奏控制"></div>
-    <div class="lesson-core-field"><label>本週目標</label><textarea id="lessonWeeklyGoal" placeholder="這週想達成的能力">${lessonEsc(p.goal||"")}</textarea></div>
-    <div class="lesson-core-field"><label>延伸任務 / 支線任務</label><textarea id="lessonWeeklySideQuest" placeholder="可填寫加強項目、補救重點">${lessonEsc(p.sideQuest||"")}</textarea></div>
-    <div class="lesson-total"><span>本週任務模板</span><span>可同步到今天課堂流程</span></div>
-    <div id="lessonWeeklyTasks"></div>
-    <div class="lesson-inline-actions">
-      <button class="lesson-core-btn" onclick="lessonAddWeeklyTask()">＋ 新增任務</button>
-      <button class="lesson-core-btn primary" onclick="lessonSaveWeeklyPlan()">儲存本週主線</button>
-      <button class="lesson-core-btn" onclick="lessonSyncWeeklyToToday()">同步到今天課堂流程</button>
-    </div>`;
-  const wrap = document.getElementById("lessonWeeklyTasks");
-  wrap.innerHTML = "";
-  (p.tasks || []).forEach(t=>lessonAddWeeklyTask(t.title,t.minutes));
-}
 function lessonAddWeeklyTask(title="新任務",minutes=5){
   const wrap = document.getElementById("lessonWeeklyTasks"); if(!wrap) return;
   const div = document.createElement("div");
@@ -14083,23 +13866,6 @@ function lessonAddWeeklyTask(title="新任務",minutes=5){
 }
 function lessonCollectWeeklyTasks(){
   return [...document.querySelectorAll("#lessonWeeklyTasks .lesson-core-row")].map(row=>({title:row.querySelector(".lesson-weekly-task-title")?.value?.trim() || "",minutes:Math.max(1,Number(row.querySelector(".lesson-weekly-task-min")?.value||1))})).filter(x=>x.title);
-}
-function lessonSaveWeeklyPlan(){
-  const rec = lessonRecord();
-  rec.weeklyPlan.title = document.getElementById("lessonWeeklyTitle")?.value || "";
-  rec.weeklyPlan.goal = document.getElementById("lessonWeeklyGoal")?.value || "";
-  rec.weeklyPlan.sideQuest = document.getElementById("lessonWeeklySideQuest")?.value || "";
-  rec.weeklyPlan.tasks = lessonCollectWeeklyTasks();
-  const old = lessonGetWeeklyMainlineCompat();
-  old.title = rec.weeklyPlan.title; old.goal = rec.weeklyPlan.goal; old.sideQuest = rec.weeklyPlan.sideQuest;
-  old.tasks = rec.weeklyPlan.tasks.map(x=>x.title).join("\n"); old.taskMinutes = rec.weeklyPlan.tasks.map(x=>x.minutes);
-  lessonSave(); alert("本週主線已儲存。"); try{ render(); }catch(e){}
-}
-function lessonSyncWeeklyToToday(){
-  lessonSaveWeeklyPlan();
-  const rec = lessonRecord();
-  rec.todayFlow.tasks = rec.weeklyPlan.tasks.map(t=>({title:t.title,minutes:t.minutes,done:false}));
-  lessonSave(); alert("已同步到今天課堂流程。"); try{ render(); }catch(e){}
 }
 
 function lessonRenderTodayFlow(rec){
@@ -14152,15 +13918,7 @@ function lessonSaveTodayFlow(){
   localStorage.setItem("battle_start_class_time", rec.todayFlow.startTime);
   lessonSave(); alert("今天課堂流程已儲存。"); try{ render(); }catch(e){}
 }
-function lessonRenderFixedCurriculum(rec){
-  const root = document.getElementById("lessonFixedCurriculumCore"); if(!root) return;
-  root.innerHTML = `<div class="lesson-core-field"><label>固定課綱 / 長期進度</label><textarea id="lessonFixedText" placeholder="例如：音階、節奏、視譜、曲目段落。">${lessonEsc(rec.fixedCurriculum.text||"")}</textarea></div><button class="lesson-core-btn primary" onclick="lessonSaveFixedCurriculum()">儲存固定課綱</button>`;
-}
 function lessonSaveFixedCurriculum(){ const rec = lessonRecord(); rec.fixedCurriculum.text = document.getElementById("lessonFixedText")?.value || ""; lessonSave(); alert("固定課綱已儲存。"); }
-function lessonRenderGrowthHighlights(rec){
-  const root = document.getElementById("lessonGrowthHighlightsCore"); if(!root) return;
-  root.innerHTML = `<div class="lesson-core-field"><label>成長亮點</label><textarea id="lessonGrowthText" placeholder="例如：今天節奏穩定、主動幫助同學。">${lessonEsc(rec.growthHighlights.text||"")}</textarea></div><button class="lesson-core-btn primary" onclick="lessonSaveGrowthHighlights()">儲存成長亮點</button>`;
-}
 function lessonSaveGrowthHighlights(){ const rec = lessonRecord(); rec.growthHighlights.text = document.getElementById("lessonGrowthText")?.value || ""; lessonSave(); alert("成長亮點已儲存。"); }
 
 /* Start Class reads Clean Core todayFlow */
@@ -14325,23 +14083,6 @@ function lesson101MasterCurriculumText(){
   return "";
 }
 
-function lessonRenderFixedCurriculum(rec){
-  const root = document.getElementById("lessonFixedCurriculumCore");
-  if(!root) return;
-
-  const text = lesson101MasterCurriculumText();
-
-  root.innerHTML = `
-    <div class="lesson-text-only-note">
-      此區只顯示「設定中心／母課綱」內容，不在每日課程紀錄中編輯，避免每天產生不同版本。
-    </div>
-    ${
-      text
-      ? `<div class="lesson-readonly-box">${lessonEsc(text)}</div>`
-      : `<div class="lesson-empty-note">尚未在設定中心建立母課綱。請回設定中心建立固定課綱後，這裡會自動顯示。</div>`
-    }
-  `;
-}
 
 function lesson101StudentName(studentId){
   try{
@@ -14352,76 +14093,7 @@ function lesson101StudentName(studentId){
   }
 }
 
-function lesson101HighlightLogs(){
-  const logs = [];
 
-  // 冒險分數 / 點數紀錄：視為亮點來源
-  (state.pointLogs || []).forEach(l=>{
-    const points = Number(l.points ?? l.amount ?? 0) || 0;
-    if(points <= 0) return;
-    logs.push({
-      date:l.date || l.createdAt || "",
-      studentId:l.studentId,
-      title:`${lesson101StudentName(l.studentId)}｜冒險分數 +${points}`,
-      text:l.reason || l.feedback || l.type || "課堂亮眼表現",
-      color:"#d4a017"
-    });
-  });
-
-  // 成長日誌中偏亮點型的紀錄
-  (state.growthLogs || []).forEach(l=>{
-    const type = String(l.type || l.title || "");
-    const feedback = String(l.feedback || "");
-    const isHighlight =
-      type.includes("幫助") ||
-      type.includes("挑戰") ||
-      type.includes("亮點") ||
-      type.includes("冒險") ||
-      feedback.includes("主動") ||
-      feedback.includes("幫助") ||
-      feedback.includes("亮眼");
-
-    if(!isHighlight) return;
-
-    logs.push({
-      date:l.date || l.createdAt || "",
-      studentId:l.studentId,
-      title:`${lesson101StudentName(l.studentId)}｜${lessonEsc(type || "成長亮點")}`,
-      text:feedback || "課堂亮眼表現",
-      color:l.color || "#7fc8a9"
-    });
-  });
-
-  return logs
-    .sort((a,b)=>String(b.date).localeCompare(String(a.date)))
-    .slice(0,12);
-}
-
-function lessonRenderGrowthHighlights(rec){
-  const root = document.getElementById("lessonGrowthHighlightsCore");
-  if(!root) return;
-
-  const logs = lesson101HighlightLogs();
-
-  root.innerHTML = `
-    <div class="lesson-text-only-note">
-      此區不手動編輯；按下冒險分數／點數加點／特殊成長紀錄後，會自動同步顯示在這裡。
-    </div>
-    ${
-      logs.length
-      ? `<div class="lesson-highlight-list">
-          ${logs.map(l=>`
-            <div class="lesson-highlight-item" style="border-left-color:${lessonEsc(l.color)}">
-              <div class="lesson-highlight-title">${lessonEsc(l.title)}</div>
-              <div>${lessonEsc(l.text)}</div>
-              <div class="lesson-highlight-meta">${lessonEsc(l.date || "")}</div>
-            </div>
-          `).join("")}
-        </div>`
-      : `<div class="lesson-empty-note">目前尚無冒險分數或成長亮點紀錄。上課時按學生的冒險分數／點數加點後，這裡會自動出現。</div>`
-    }
-  `;
-}
 
 
 
@@ -14450,26 +14122,7 @@ function lesson102ClassDates(){
   return [];
 }
 
-function lesson102WeekNumber(){
-  const dates = lesson102ClassDates();
-  const current = classContext?.date || "";
-  const idx = dates.indexOf(current);
-  if(idx >= 0) return idx + 1;
-  return 1;
-}
 
-function lesson102TemplateForCurrentClass(){
-  try{
-    if(typeof curriculumTemplateForCurrentClass === "function"){
-      return curriculumTemplateForCurrentClass();
-    }
-  }catch(e){}
-
-  const templates = typeof ensureCurriculumTemplates === "function" ? ensureCurriculumTemplates() : (state.curriculumTemplates || []);
-  const cls = lesson102CurrentClass();
-  const assignedId = cls?.curriculumTemplateId || "";
-  return templates.find(t=>t.id === assignedId) || templates[0] || null;
-}
 
 function lesson102WeekItems(week){
   return String(week?.items || "").split(/\n/).map(s=>s.trim()).filter(Boolean);
@@ -14480,66 +14133,6 @@ function lesson102GetWeek(template,weekNo){
   return weeks.find(w=>Number(w.week)===weekNo) || weeks[weekNo-1] || null;
 }
 
-function lessonRenderFixedCurriculum(rec){
-  const root = document.getElementById("lessonFixedCurriculumCore");
-  if(!root) return;
-
-  const cls = lesson102CurrentClass();
-  const school = lesson102CurrentSchool();
-  const template = lesson102TemplateForCurrentClass();
-  const weekNo = lesson102WeekNumber();
-  const dates = lesson102ClassDates();
-
-  if(!template){
-    root.innerHTML = `
-      <div class="lesson-empty-note">
-        尚未建立課綱母版。請到「設定中心 → 課綱母版」建立，例如：三年級下學期 20 週。
-      </div>
-    `;
-    return;
-  }
-
-  const currentWeek = lesson102GetWeek(template, weekNo);
-  const previewWeeks = (template.weeks || [])
-    .filter(w => Number(w.week) >= Math.max(1, weekNo-1) && Number(w.week) <= weekNo+2)
-    .slice(0,4);
-
-  root.innerHTML = `
-    <div class="lesson-text-only-note">
-      此區只顯示設定中心的母課綱，不在每日課程紀錄中編輯。<br>
-      週次判定目前依「此課程已建立的上課日期順序」計算：目前日期是第 ${weekNo} 次課。
-      ${dates.length ? "" : "<br>目前此課程尚未建立日期，因此暫時以第 1 週顯示。"}
-    </div>
-
-    <div class="lesson-curriculum-head">
-      <div class="lesson-curriculum-pill">📚 ${lessonEsc(template.name || "未命名課綱")}</div>
-      <div class="lesson-curriculum-pill">🏫 ${lessonEsc(school?.name || "未指定學校")}｜${lessonEsc(cls?.name || "未指定課程")}</div>
-      <div class="lesson-curriculum-pill">📅 ${lessonEsc(classContext?.date || "")}｜第 ${weekNo} 週</div>
-    </div>
-
-    ${
-      currentWeek ? `
-        <div class="lesson-curriculum-week-card current">
-          <div class="lesson-curriculum-week-title">目前週次：第 ${Number(currentWeek.week)||weekNo} 週｜${lessonEsc(currentWeek.title || "未命名")}</div>
-          ${currentWeek.goal ? `<div>${lessonEsc(currentWeek.goal)}</div>` : ""}
-          ${lesson102WeekItems(currentWeek).length ? `
-            <ul class="lesson-curriculum-items">
-              ${lesson102WeekItems(currentWeek).map(item=>`<li>${lessonEsc(item)}</li>`).join("")}
-            </ul>
-          ` : `<div class="lesson-empty-note">本週尚未設定任務內容。</div>`}
-        </div>
-      ` : `<div class="lesson-empty-note">此課綱找不到第 ${weekNo} 週內容。</div>`
-    }
-
-    <div class="lesson-filter-note">附近週次預覽：</div>
-    ${previewWeeks.map(w=>`
-      <div class="lesson-curriculum-week-card ${Number(w.week)===weekNo?'current':''}">
-        <div class="lesson-curriculum-week-title">第 ${Number(w.week)} 週｜${lessonEsc(w.title || "未命名")}</div>
-        ${w.goal ? `<div>${lessonEsc(w.goal)}</div>` : ""}
-      </div>
-    `).join("")}
-  `;
-}
 
 function lesson102CurrentClassStudentIds(){
   try{
@@ -14852,43 +14445,9 @@ function sc104NowSeconds(){
   return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
 }
 
-function sc939Ranges(){
-  let cur = sc104TimeToSeconds(sc939StartTime());
-  return sc939TaskItems().map((item,idx)=>{
-    const start = cur;
-    const minutes = Math.max(1, Number(item.minutes||1));
-    const end = start + minutes*60;
-    cur = end;
-    return {idx,title:item.title,minutes,start,end};
-  });
-}
 
-function sc939Progress(){
-  const ranges = sc939Ranges();
-  if(!ranges.length) return 0;
-  const start = ranges[0].start;
-  const end = ranges[ranges.length-1].end;
-  const now = sc104NowSeconds();
-  if(now <= start) return 0;
-  if(now >= end) return 100;
-  return Math.round((now-start)/(end-start)*100);
-}
 
-function sc939ActiveName(){
-  const now = sc104NowSeconds();
-  const ranges = sc939Ranges();
-  const active = ranges.find(r=>now>=r.start && now<r.end);
-  if(active) return active.title;
-  if(ranges.length && now >= ranges[ranges.length-1].end) return "本堂課已完成";
-  return "尚未開始";
-}
 
-function sc939MinToTime(totalSeconds){
-  totalSeconds = ((Number(totalSeconds)||0)+86400)%86400;
-  const h = Math.floor(totalSeconds/3600);
-  const m = Math.floor((totalSeconds%3600)/60);
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-}
 
 
 
@@ -15180,49 +14739,10 @@ function st106Lesson(){
   rec.todayFlow.tasks.forEach(st106NormalizeTask);
   return rec.todayFlow;
 }
-function st106NormalizeTask(t){
-  if(!t.status) t.status = t.done ? "done" : "pending";
-  t.done = t.status === "done";
-  t.minutes = Math.max(1,Number(t.minutes || 1));
-  t.title = t.title || "未命名任務";
-  return t;
-}
 function st106Tasks(){
   const lesson = st106Lesson();
   lesson.tasks.forEach(st106NormalizeTask);
   return lesson.tasks;
-}
-function st106Status(t){
-  st106NormalizeTask(t);
-  return t.status || "pending";
-}
-function st106Icon(status){
-  if(status === "done") return "✓";
-  if(status === "carry") return "↷";
-  return "○";
-}
-function st106Label(status){
-  if(status === "done") return "已完成";
-  if(status === "carry") return "保留至下次";
-  return "未完成";
-}
-function st106NextStatus(status){
-  if(status === "pending") return "done";
-  if(status === "done") return "carry";
-  return "pending";
-}
-function st106SetStatus(idx,status){
-  const tasks = st106Tasks();
-  if(!tasks[idx]) return;
-  tasks[idx].status = status;
-  tasks[idx].done = status === "done";
-  st106SyncCarryTasks();
-  try{saveState();}catch(e){}
-  renderStartClassMode();
-}
-function st106CycleStatus(idx){
-  const tasks = st106Tasks();
-  st106SetStatus(idx, st106NextStatus(st106Status(tasks[idx])));
 }
 function st106EnsureCarryStore(){
   if(!state.carryTasks || typeof state.carryTasks !== "object") state.carryTasks = {};
@@ -15308,146 +14828,6 @@ function st106SetStartTime(v){
   try{saveState();}catch(e){}
   renderStartClassMode();
 }
-function st106TimeToSeconds(t){
-  const p = String(t || "10:30").split(":").map(n=>Number(n)||0);
-  return (p[0]||0)*3600 + (p[1]||0)*60 + (p[2]||0);
-}
-function st106NowSeconds(){
-  const d = new Date();
-  return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
-}
-function st106SecondsToTime(total){
-  total = ((Number(total)||0)+86400)%86400;
-  const h = Math.floor(total/3600);
-  const m = Math.floor((total%3600)/60);
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-}
-function st106Ranges(){
-  let cur = st106TimeToSeconds(st106StartTime());
-  return st106Tasks().map((t,idx)=>{
-    const start = cur;
-    const end = start + Number(t.minutes)*60;
-    cur = end;
-    return {idx,title:t.title,minutes:Number(t.minutes),start,end};
-  });
-}
-function st106Progress(){
-  const ranges = st106Ranges();
-  if(!ranges.length) return 0;
-  const start = ranges[0].start;
-  const end = ranges[ranges.length-1].end;
-  const now = st106NowSeconds();
-  if(now<=start) return 0;
-  if(now>=end) return 100;
-  return Math.round((now-start)/(end-start)*100);
-}
-function st106ActiveName(){
-  const now = st106NowSeconds();
-  const active = st106Ranges().find(r=>now>=r.start && now<r.end);
-  if(active) return active.title;
-  const ranges = st106Ranges();
-  if(ranges.length && now>=ranges[ranges.length-1].end) return "本堂課已完成";
-  return "尚未開始";
-}
-function st106OverdueSeconds(range,task){
-  if(st106Status(task)!=="pending") return 0;
-  return Math.max(0, st106NowSeconds() - range.end);
-}
-function st106OverdueLevel(range,task){
-  const sec = st106OverdueSeconds(range,task);
-  if(sec<=0) return "none";
-  if(sec>=180) return "hard";
-  return "soft";
-}
-function st106FirstOverdueIdx(ranges,tasks){
-  for(const r of ranges){
-    if(st106OverdueLevel(r,tasks[r.idx]) !== "none") return r.idx;
-  }
-  return -1;
-}
-function st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx){
-  const task = tasks[r.idx] || {};
-  const status = st106Status(task);
-  const isCurrent = now>=r.start && now<r.end;
-  const isPast = now>=r.end;
-  const isNext = !isCurrent && !isPast && r.idx===nextIdx;
-  const overdueSec = st106OverdueSeconds(r,task);
-  const overdueLevel = st106OverdueLevel(r,task);
-  const activeOverdue = r.idx===activeOverdueIdx;
-
-  const cls = [
-    "st106-task",
-    isCurrent?"current":"",
-    isNext?"next":"",
-    isPast && status==="pending" && overdueLevel==="none"?"past":"",
-    status==="done"?"done":"",
-    status==="carry"?"carry":"",
-    overdueLevel==="soft"?"overdue-soft":"",
-    overdueLevel==="hard"?"overdue-hard":"",
-    activeOverdue?"active-overdue":""
-  ].filter(Boolean).join(" ");
-
-  const badges = [
-    isCurrent?`<span class="st106-badge now">現在</span>`:"",
-    isNext?`<span class="st106-badge next">下一個</span>`:"",
-    status==="carry"?`<span class="st106-badge carry">保留</span>`:"",
-    overdueLevel!=="none"?`<span class="st106-badge overdue-${overdueLevel}">${Math.floor(overdueSec/60)>0?`超時 ${Math.floor(overdueSec/60)} 分`:"超時中"}</span>`:""
-  ].join("");
-
-  const suggestion = overdueLevel==="soft"
-    ? `<div class="st106-suggestion">已超時，可完成、保留至下次或繼續觀察。</div>`
-    : (overdueLevel==="hard"
-      ? `<div class="st106-suggestion hard">已落後 ${Math.floor(overdueSec/60)} 分鐘，建議保留部分任務或縮短後面流程。</div>`
-      : "");
-
-  return `
-    <div class="${cls}">
-      <button class="st106-status-btn ${status}" onclick="st106CycleStatus(${r.idx})" title="${st106Esc(st106Label(status))}">
-        ${st106Icon(status)}
-      </button>
-      <div>
-        <div class="st106-task-title">${st106Esc(r.title)} <span class="st106-badge">${r.minutes} 分鐘</span>${badges}</div>
-        <div class="st106-task-meta">${st106SecondsToTime(r.start)} - ${st106SecondsToTime(r.end)}｜${st106Esc(st106Label(status))}</div>
-        ${suggestion}
-      </div>
-    </div>
-  `;
-}
-function st106Flow(){
-  const ranges = st106Ranges();
-  const tasks = st106Tasks();
-  const now = st106NowSeconds();
-  const nextIdx = ranges.findIndex(r=>now<r.start);
-  const activeOverdueIdx = st106FirstOverdueIdx(ranges,tasks);
-  const total = ranges.reduce((s,r)=>s+r.minutes,0);
-  const doneCount = tasks.filter(t=>st106Status(t)==="done").length;
-  const carryCount = tasks.filter(t=>st106Status(t)==="carry").length;
-  const rate = tasks.length ? Math.round(doneCount/tasks.length*100) : 0;
-
-  return `
-    <h2>📅 今日課堂</h2>
-    ${st106CarryPanel()}
-    <h3>本堂流程</h3>
-    <div class="st106-time-row">
-      <div class="st106-field">
-        <label>上課開始時間</label>
-        <input type="time" value="${st106Esc(st106StartTime())}" onchange="st106SetStartTime(this.value)">
-      </div>
-      <div class="st106-field">
-        <label>總分鐘</label>
-        <input value="${total}" readonly>
-      </div>
-    </div>
-    <div class="st106-hint">時間軸提醒進度；○ 未完成、✓ 完成、↷ 保留至下次。</div>
-    <div class="st106-help">超時任務會呼吸提示；保留至下次不再警示，並同步到提醒事項。</div>
-    <div class="st106-progress-head"><span>現在：${st106Esc(st106ActiveName())}</span><span>${st106Progress()}%</span></div>
-    <div class="st106-progress"><div class="st106-progress-fill" style="width:${st106Progress()}%"></div></div>
-    <div class="st106-flow">
-      ${ranges.map(r=>st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx)).join("")}
-    </div>
-    <div class="st106-completion">本堂完成率：${doneCount}/${tasks.length}（${rate}%）｜保留至下次：${carryCount}</div>
-  `;
-}
 function st106Notes(){
   const lesson = st106Lesson();
   return `
@@ -15506,11 +14886,6 @@ function st106AttendanceMeta(id){
   };
   return map[val] || map.arrived;
 }
-function st106SetAttendance(id,value){
-  st106Attendance[id] = value;
-  window.st106Attendance = st106Attendance;
-  renderStartClassMode();
-}
 function st106Distribution(studentId){
   const logs = (state.growthLogs || []).filter(l=>l.studentId===studentId);
   const map = {};
@@ -15553,105 +14928,11 @@ function st106RecentLogs(studentId){
     </div>
   `).join("");
 }
-function st106SetMode(mode){
-  st106Mode = mode;
-  window.st106Mode = mode;
-  renderStartClassMode();
-}
-function st106AddXp(studentId,typeId){
-  const t = st106GrowthTypes().find(x=>x.id===typeId || x.name===typeId) || st106GrowthTypes()[0];
-  if(!t) return;
-  const remark = document.getElementById(`st106Remark_${studentId}`)?.value?.trim() || "";
-  if(!Array.isArray(state.growthLogs)) state.growthLogs = [];
-  state.growthLogs.push({
-    id:st106Id(),
-    studentId,
-    classId:classContext?.classId || "",
-    schoolId:classContext?.schoolId || "",
-    type:t.id || t.name,
-    color:st106TypeColor(t.id || t.name),
-    xp:Number(t.defaultXp || t.xp || 0),
-    feedback:remark || `開始上課快速記錄：${t.name}`,
-    date:st106NowText()
-  });
-  try{markDirty?.(`開始上課XP：${t.name}`);}catch(e){}
-  try{saveState();}catch(e){}
-  renderStartClassMode();
-}
-function st106AddPoints(studentId,points){
-  const remark = document.getElementById(`st106Remark_${studentId}`)?.value?.trim() || "";
-  if(!Array.isArray(state.pointLogs)) state.pointLogs = [];
-  state.pointLogs.push({
-    id:st106Id(),
-    studentId,
-    classId:classContext?.classId || "",
-    schoolId:classContext?.schoolId || "",
-    points:Number(points),
-    amount:Number(points),
-    reason:remark || `開始上課點數調整：${points>0?"+":""}${points}`,
-    date:st106NowText()
-  });
-  try{markDirty?.(`開始上課點數：${points>0?"+":""}${points}`);}catch(e){}
-  try{saveState();}catch(e){}
-  renderStartClassMode();
-}
 function st106Buttons(studentId){
   if(st106Mode === "points"){
     return [1,3,5,-1,-3].map(p=>`<button class="st106-chip st106-point ${p<0?'minus':''}" onclick="st106AddPoints('${studentId}',${p})">點數 ${p>0?"+":""}${p}</button>`).join("");
   }
   return st106GrowthTypes().map(t=>`<button class="st106-chip" style="background:${st106Esc(st106TypeColor(t.id || t.name))}" onclick="st106AddXp('${studentId}','${st106Esc(t.id || t.name)}')">${st106Esc(t.name)} +${Number(t.defaultXp || t.xp || 0)}</button>`).join("");
-}
-function st106StudentCard(st){
-  const xp = st106Xp(st.id);
-  const att = st106AttendanceMeta(st.id);
-  return `
-    <article class="st106-card">
-      <div class="st106-profile">
-        ${st106Photo(st)}
-        <div>
-          <div class="st106-name">${st106Esc(st.name)}</div>
-          <div class="st106-level">LV ${Math.max(1,Math.floor(xp/100)+1)} 小演奏家</div>
-          <div class="st106-xp">XP：${xp}</div>
-          <div class="st106-xp">點數：${st106Points(st.id)}</div>
-          <div class="st106-mini-bar"><div class="st106-mini-fill" style="width:${Math.min(100,xp%100)}%"></div></div>
-          <div class="st106-attendance">
-            <span class="st106-att-dot" style="background:${att.color}"></span>
-            <select onchange="st106SetAttendance('${st.id}',this.value)">
-              <option value="arrived" ${st106Attendance[st.id]==='arrived'||!st106Attendance[st.id]?'selected':''}>已到</option>
-              <option value="none" ${st106Attendance[st.id]==='none'?'selected':''}>未到</option>
-              <option value="leave" ${st106Attendance[st.id]==='leave'?'selected':''}>請假</option>
-              <option value="absent" ${st106Attendance[st.id]==='absent'?'selected':''}>缺席</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      ${st106Insight(st.id)}
-      <div class="st106-actions">
-        <div class="st106-action-head">
-          <b>${st106Mode==='xp'?'成長加分':'點數調整'}</b>
-          <span class="badge">${st106Mode==='xp'?'寫入成長日誌':'只調整兌換點數'}</span>
-        </div>
-        <div class="st106-btns">${st106Buttons(st.id)}</div>
-        <textarea id="st106Remark_${st.id}" class="st106-textarea" style="min-height:58px" placeholder="個別備註 / 成長亮點（選填）"></textarea>
-        <details>
-          <summary class="st106-log-toggle">📖 成長日誌（最近 ${st106Logs(st.id,99).length} 筆）</summary>
-          ${st106RecentLogs(st.id)}
-        </details>
-      </div>
-    </article>
-  `;
-}
-function st106ScheduleTick(){
-  if(st106Timer) clearTimeout(st106Timer);
-  if(!document.body.classList.contains("start-class-mode")) return;
-  const now = new Date();
-  const delay = 1000 - now.getMilliseconds() + 20;
-  st106Timer = setTimeout(()=>{
-    if(document.body.classList.contains("start-class-mode")){
-      try{renderStartClassMode();}catch(e){console.warn(e);}
-      st106ScheduleTick();
-    }
-  },delay);
 }
 function renderStartClassMode(){
   document.body.classList.add("start-class-mode");
@@ -15735,55 +15016,6 @@ function st1061CurrentFillPercent(range){
   return Math.max(0, Math.min(100, Math.round((now - range.start) / (range.end - range.start) * 100)));
 }
 
-function st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx){
-  const task = tasks[r.idx] || {};
-  const status = st106Status(task);
-  const isCurrent = now>=r.start && now<r.end;
-  const isPast = now>=r.end;
-  const isNext = !isCurrent && !isPast && r.idx===nextIdx;
-  const overdueSec = st106OverdueSeconds(r,task);
-  const overdueLevel = st106OverdueLevel(r,task);
-  const activeOverdue = r.idx===activeOverdueIdx;
-  const fill = isCurrent ? st1061CurrentFillPercent(r) : 0;
-
-  const cls = [
-    "st106-task",
-    isCurrent?"current":"",
-    isNext?"next":"",
-    isPast && status==="pending" && overdueLevel==="none"?"past":"",
-    status==="done"?"done":"",
-    status==="carry"?"carry":"",
-    overdueLevel==="soft"?"overdue-soft":"",
-    overdueLevel==="hard"?"overdue-hard":"",
-    activeOverdue?"active-overdue":""
-  ].filter(Boolean).join(" ");
-
-  const badges = [
-    isCurrent?`<span class="st106-badge now">現在</span>`:"",
-    isNext?`<span class="st106-badge next">下一個</span>`:"",
-    // 保留狀態由卡片右上角紫色標籤呈現，這裡不再重複顯示
-    overdueLevel!=="none"?`<span class="st106-badge overdue-${overdueLevel}">${Math.floor(overdueSec/60)>0?`超時 ${Math.floor(overdueSec/60)} 分`:"超時中"}</span>`:""
-  ].join("");
-
-  const suggestion = overdueLevel==="soft"
-    ? `<div class="st106-suggestion">已超時，可完成、保留至下次或繼續觀察。</div>`
-    : (overdueLevel==="hard"
-      ? `<div class="st106-suggestion hard">已落後 ${Math.floor(overdueSec/60)} 分鐘，建議保留部分任務或縮短後面流程。</div>`
-      : "");
-
-  return `
-    <div class="${cls}" style="--st106-task-fill:${fill}%">
-      <button class="st106-status-btn ${status}" onclick="st106CycleStatus(${r.idx})" title="${st106Esc(st106Label(status))}">
-        ${st106Icon(status)}
-      </button>
-      <div>
-        <div class="st106-task-title">${st106Esc(r.title)} <span class="st106-badge">${r.minutes} 分鐘</span>${badges}</div>
-        <div class="st106-task-meta">${st106SecondsToTime(r.start)} - ${st106SecondsToTime(r.end)}｜${st106Esc(st106Label(status))}</div>
-        ${suggestion}
-      </div>
-    </div>
-  `;
-}
 
 
 
@@ -16093,39 +15325,6 @@ function st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx){
   const state = ST1062_TaskEngine.runtime(r, tasks[r.idx] || {}, {now,nextIdx,activeOverdueIdx});
   return ST1062_TaskCardRenderer.render(state);
 }
-function st106Flow(){
-  const tasks = st106Tasks();
-  const ranges = st106Ranges();
-  const now = ST1062_TaskEngine.nowSeconds();
-  const nextIdx = ranges.findIndex(r=>now<r.start);
-  const activeOverdueIdx = ST1062_TaskEngine.firstOverdueIndex(ranges,tasks,now);
-  const total = ranges.reduce((s,r)=>s+r.minutes,0);
-  const summary = ST1062_TaskEngine.summary(tasks);
-
-  return `
-    <h2>📅 今日課堂</h2>
-    ${st106CarryPanel()}
-    <h3>本堂流程</h3>
-    <div class="st106-time-row">
-      <div class="st106-field">
-        <label>上課開始時間</label>
-        <input type="time" value="${st106Esc(st106StartTime())}" onchange="st106SetStartTime(this.value)">
-      </div>
-      <div class="st106-field">
-        <label>總分鐘</label>
-        <input value="${total}" readonly>
-      </div>
-    </div>
-    <div class="st106-hint">時間軸提醒進度；○ 未完成、✓ 完成、↷ 保留至下次。</div>
-    <div class="st106-help">超時任務會呼吸提示；保留至下次不再警示，並同步到提醒事項。</div>
-    <div class="st106-progress-head"><span>現在：${st106Esc(ST1062_TaskEngine.activeName(ranges,now))}</span><span>${ST1062_TaskEngine.progress(ranges,now)}%</span></div>
-    <div class="st106-progress"><div class="st106-progress-fill" style="width:${ST1062_TaskEngine.progress(ranges,now)}%"></div></div>
-    <div class="st106-flow">
-      ${ranges.map(r=>st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx)).join("")}
-    </div>
-    <div class="st106-completion">本堂完成率：${summary.done}/${summary.total}（${summary.rate}%）｜保留至下次：${summary.carry}</div>
-  `;
-}
 
 function st106ScheduleTick(){ ST1062_TimerLoop.start(); }
 
@@ -16367,40 +15566,6 @@ function st1064CopilotHtml(){
   `;
 }
 
-function st106Flow(){
-  const tasks = st106Tasks();
-  const ranges = st106Ranges();
-  const now = ST1062_TaskEngine.nowSeconds();
-  const nextIdx = ranges.findIndex(r=>now<r.start);
-  const activeOverdueIdx = ST1062_TaskEngine.firstOverdueIndex(ranges,tasks,now);
-  const total = ranges.reduce((s,r)=>s+r.minutes,0);
-  const summary = ST1062_TaskEngine.summary(tasks);
-
-  return `
-    <h2>📅 今日課堂</h2>
-    ${st106CarryPanel()}
-    <h3>本堂流程</h3>
-    <div class="st106-time-row">
-      <div class="st106-field">
-        <label>上課開始時間</label>
-        <input type="time" value="${st106Esc(st106StartTime())}" onchange="st106SetStartTime(this.value)">
-      </div>
-      <div class="st106-field">
-        <label>總分鐘</label>
-        <input value="${total}" readonly>
-      </div>
-    </div>
-    <div class="st106-hint">時間軸提醒進度；○ 未完成、✓ 完成、↷ 保留至下次。</div>
-    <div class="st106-help">綠色是現在、灰色是下一個、黃色是超時、紅色是嚴重超時、紫色是保留。</div>
-    <div class="st106-progress-head"><span>現在：${st106Esc(ST1062_TaskEngine.activeName(ranges,now))}</span><span>${ST1062_TaskEngine.progress(ranges,now)}%</span></div>
-    <div class="st106-progress"><div class="st106-progress-fill" style="width:${ST1062_TaskEngine.progress(ranges,now)}%"></div></div>
-    ${st1064CopilotHtml()}
-    <div class="st106-flow">
-      ${ranges.map(r=>st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx)).join("")}
-    </div>
-    <div class="st106-completion">本堂完成率：${summary.done}/${summary.total}（${summary.rate}%）｜保留至下次：${summary.carry}</div>
-  `;
-}
 
 if(typeof st1063SummaryText === "function"){
   const __st1064OldSummaryText = st1063SummaryText;
@@ -16597,30 +15762,6 @@ function st107OpenHighlights(){
   document.body.appendChild(overlay);
 }
 
-function st107OpenReplay(){
-  st107EnsureStores();
-  const key = st107SessionKey();
-  const logs = state.classReplayLogs.filter(l=>l.sessionKey===key).slice(-80);
-  const overlay = document.createElement("div");
-  overlay.className = "st107-overlay";
-  overlay.id = "st107Overlay";
-  overlay.innerHTML = `
-    <div class="st107-modal">
-      <div class="st1063-title">🎬 課堂 Replay</div>
-      <div class="st1063-sub">${st106Esc(st107CurrentContextLabel())}</div>
-      ${logs.length ? logs.map(l=>`
-        <div class="st107-replay-row">
-          <div>${st106Esc(l.time)}</div>
-          <div>${st106Esc(l.text)}</div>
-        </div>
-      `).join("") : `<div class="st107-highlight-item">目前尚無 Replay 紀錄。開始切換任務、加分或保留任務後會逐步累積。</div>`}
-      <div class="st107-actions">
-        <button class="btn red" onclick="st107CloseOverlay()">關閉</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-}
 
 function st107ToolbarHtml(){
   return `
@@ -16657,41 +15798,6 @@ ST1062_StudentActions.addPoints = function(studentId,points){
 };
 
 /* Override flow render to include enhanced copilot and toolbar */
-function st106Flow(){
-  const tasks = st106Tasks();
-  const ranges = st106Ranges();
-  const now = ST1062_TaskEngine.nowSeconds();
-  const nextIdx = ranges.findIndex(r=>now<r.start);
-  const activeOverdueIdx = ST1062_TaskEngine.firstOverdueIndex(ranges,tasks,now);
-  const total = ranges.reduce((s,r)=>s+r.minutes,0);
-  const summary = ST1062_TaskEngine.summary(tasks);
-
-  return `
-    <h2>📅 今日課堂</h2>
-    ${st107ToolbarHtml()}
-    ${st106CarryPanel()}
-    <h3>本堂流程</h3>
-    <div class="st106-time-row">
-      <div class="st106-field">
-        <label>上課開始時間</label>
-        <input type="time" value="${st106Esc(st106StartTime())}" onchange="st106SetStartTime(this.value)">
-      </div>
-      <div class="st106-field">
-        <label>總分鐘</label>
-        <input value="${total}" readonly>
-      </div>
-    </div>
-    <div class="st106-hint">時間軸提醒進度；○ 未完成、✓ 完成、↷ 保留至下次。</div>
-    <div class="st106-help">綠色是現在、灰色是下一個、黃色是超時、紅色是嚴重超時、紫色是保留。</div>
-    <div class="st106-progress-head"><span>現在：${st106Esc(ST1062_TaskEngine.activeName(ranges,now))}</span><span>${ST1062_TaskEngine.progress(ranges,now)}%</span></div>
-    <div class="st106-progress"><div class="st106-progress-fill" style="width:${ST1062_TaskEngine.progress(ranges,now)}%"></div></div>
-    ${st107EnhancedCopilotHtml()}
-    <div class="st106-flow">
-      ${ranges.map(r=>st106TaskCard(r,tasks,now,nextIdx,activeOverdueIdx)).join("")}
-    </div>
-    <div class="st106-completion">本堂完成率：${summary.done}/${summary.total}（${summary.rate}%）｜保留至下次：${summary.carry}</div>
-  `;
-}
 
 /* Summary enrichment */
 if(typeof st1063SummaryText === "function"){
@@ -16928,9 +16034,6 @@ function st108RenderFlow(){
 }
 
 /* Replace only the flow entry point; UI stays identical to v15.0 Clean Core Runtime 整理版
-function st106Flow(){
-  return st108RenderFlow();
-}
 
 /* Make event logging safer: prevent duplicate wrapper stacking in later versions */
 if(!window.__ST108_EVENT_GUARDS_INSTALLED__){
@@ -17485,36 +16588,7 @@ function st111ProfileBlock(st){
   `;
 }
 
-function st111ActionsBlock(st){
-  return `
-    <div class="st106-actions">
-      <div class="st106-action-head">
-        <b>${st106Mode==='xp'?'成長加分':'點數調整'}</b>
-        <span class="badge">${st106Mode==='xp'?'寫入成長日誌':'只調整兌換點數'}</span>
-      </div>
-      <div class="st106-btns">${st106Buttons(st.id)}</div>
-      ${typeof st109QuickTagsHtml==="function" ? st109QuickTagsHtml(st.id) : ""}
-      <textarea id="st106Remark_${st.id}" class="st106-textarea" style="min-height:58px" placeholder="個別備註 / 成長亮點（選填）"></textarea>
-      <details>
-        <summary class="st106-log-toggle">📖 成長日誌（最近 ${st106Logs(st.id,99).length} 筆）</summary>
-        ${st106RecentLogs(st.id)}
-      </details>
-    </div>
-  `;
-}
 
-function st106StudentCard(st){
-  const p = typeof st110MageProfile==="function" ? st110MageProfile(st.id) : {mage:{color:"#7fc8a9"}};
-  return `
-    <article class="st106-card st111-card st110-aura" style="--mage-color:${p.mage.color}">
-      ${st111ProfileBlock(st)}
-      <div class="st106-insight">
-        ${st111AbilityBarsHtml(st.id)}
-      </div>
-      ${st111ActionsBlock(st)}
-    </article>
-  `;
-}
 
 console.info("ST111 Pan Flute Magician Character Card loaded");
 
@@ -17649,41 +16723,6 @@ function st113GiftButtons(studentId){
   `;
 }
 
-function st111ActionsBlock(st){
-  return `
-    <div class="st106-actions">
-      <div class="st113-action-section">
-        <div class="st113-action-title">
-          <span>✨ 魔法 XP 成長</span>
-          <span class="badge">角色養成系統</span>
-        </div>
-        <div class="st106-btns">${st113XpButtons(st.id)}</div>
-      </div>
-
-      <div class="st113-action-section">
-        <div class="st113-action-title">
-          <span>📝 教學觀察標籤</span>
-          <span class="badge">只留一組</span>
-        </div>
-        ${typeof st109QuickTagsHtml==="function" ? st109QuickTagsHtml(st.id) : ""}
-      </div>
-
-      <div class="st113-note-wrap">
-        <div class="st113-note-title">✏️ 個別備註 / 成長亮點</div>
-        <textarea id="st106Remark_${st.id}" class="st106-textarea" style="min-height:70px" placeholder="例如：今天氣息變穩、高音開始打開、合奏速度還要提醒。"></textarea>
-      </div>
-
-      ${st113GiftButtons(st.id)}
-
-      <div class="st113-log-wrap">
-        <details>
-          <summary class="st106-log-toggle">📖 成長日誌（最近 ${st106Logs(st.id,99).length} 筆）</summary>
-          ${st106RecentLogs(st.id)}
-        </details>
-      </div>
-    </div>
-  `;
-}
 
 /* Make sure student card uses the clean action block */
 if(typeof st106StudentCard === "function"){
@@ -17893,14 +16932,8 @@ const ST114 = {
 /* Backward-compatible routing.
    Existing code can continue calling old functions,
    but now the final rendering goes through ST114 modules. */
-function st106StudentCard(st){
-  return ST114.renderStudentCard(st);
-}
 
 /* Keep action block name available for older calls */
-function st111ActionsBlock(st){
-  return ST114.ClassActionPanel.render(st);
-}
 
 /* Keep flow entry stable without changing existing UI */
 const __st114OldFlow = typeof st106Flow === "function" ? st106Flow : null;
@@ -17908,9 +16941,6 @@ function st114RenderFlowSafe(){
   if(typeof st108RenderFlow==="function") return st108RenderFlow();
   if(__st114OldFlow) return __st114OldFlow();
   return "";
-}
-function st106Flow(){
-  return st114RenderFlowSafe();
 }
 
 console.info("ST114 Start Class Structure Cleanup loaded");
@@ -18019,18 +17049,6 @@ if(window.ST114?.ClassActionPanel){
 }
 
 /* Re-render student card directly so older st112/st113 injected gift sections cannot appear */
-function st106StudentCard(st){
-  const p = typeof st110MageProfile==="function" ? st110MageProfile(st.id) : {mage:{color:"#7fc8a9"}};
-  return `
-    <article class="st106-card st111-card st110-aura" style="--mage-color:${p.mage.color}">
-      ${typeof st111ProfileBlock==="function" ? st111ProfileBlock(st) : ""}
-      <div class="st106-insight">
-        ${typeof st111AbilityBarsHtml==="function" ? st111AbilityBarsHtml(st.id) : ""}
-      </div>
-      ${st115ActionPanel(st)}
-    </article>
-  `;
-}
 
 if(window.ST114){
   ST114.renderStudentCard = function(student){
@@ -18044,14 +17062,6 @@ if(window.ST114){
 }
 
 /* Cleanup safety: if any legacy gift block accidentally appears twice, keep only the first visible gift section */
-function st115RemoveDuplicateGiftSections(){
-  document.querySelectorAll(".st106-actions").forEach(panel=>{
-    const gifts = panel.querySelectorAll(".st112-gift-section,.st113-gift-section,.st115-gift-section");
-    if(gifts.length > 1){
-      gifts.forEach((g,idx)=>{ if(idx>0) g.remove(); });
-    }
-  });
-}
 
 const __st115OldRenderStart = typeof renderStartClassMode === "function" ? renderStartClassMode : null;
 if(__st115OldRenderStart && !window.__ST115_RENDER_GUARD__){
@@ -18087,24 +17097,6 @@ function st116FindFlowContainer(){
   }) || null;
 }
 
-function st116RefreshFlowOnly(){
-  if(!document.body.classList.contains("start-class-mode")) return false;
-  const box = st116FindFlowContainer();
-  if(!box || typeof st106Flow !== "function") return false;
-
-  const oldScroll = box.scrollTop;
-  window.__ST116_FLOW_ONLY_TICK__ = true;
-  try{
-    box.innerHTML = st106Flow();
-    box.scrollTop = oldScroll;
-    return true;
-  }catch(e){
-    console.warn("ST116 flow-only refresh failed", e);
-    return false;
-  }finally{
-    window.__ST116_FLOW_ONLY_TICK__ = false;
-  }
-}
 
 /* v15.0 Clean Core Runtime 整理版
    保留空函式，避免每秒 DOM remove 造成跳動。 */
@@ -18290,14 +17282,6 @@ function st120QuestBoxHtml(){
   `;
 }
 
-function st120InjectQuestBox(){
-  const flow = document.querySelector(".st106-flow");
-  if(!flow) return;
-  const parent = flow.parentElement;
-  if(!parent) return;
-  parent.querySelectorAll('[data-st120="quest"],[data-st120="picker"]').forEach(el=>el.remove());
-  flow.insertAdjacentHTML("beforebegin", st120QuestBoxHtml());
-}
 
 /* full render 後插入，不包 st106Flow */
 const __st120SafeRenderStart = typeof renderStartClassMode==="function" ? renderStartClassMode : null;
@@ -18377,35 +17361,8 @@ function st120DecorateFlowHtml(baseHtml){
 }
 
 /* Override flow-only refresh with synchronous decoration */
-function st116RefreshFlowOnly(){
-  if(!document.body.classList.contains("start-class-mode")) return false;
-  const box = typeof st116FindFlowContainer === "function" ? st116FindFlowContainer() : null;
-  if(!box || typeof st106Flow !== "function") return false;
-
-  const oldScroll = box.scrollTop;
-  window.__ST116_FLOW_ONLY_TICK__ = true;
-  try{
-    const html = st120DecorateFlowHtml(st106Flow());
-    box.innerHTML = html;
-    box.scrollTop = oldScroll;
-    return true;
-  }catch(e){
-    console.warn("ST120.2 flow-only refresh failed", e);
-    return false;
-  }finally{
-    window.__ST116_FLOW_ONLY_TICK__ = false;
-  }
-}
 
 /* Make post-render injection idempotent and non-jumpy */
-function st120InjectQuestBox(){
-  const flow = document.querySelector(".st106-flow");
-  if(!flow) return;
-  const parent = flow.parentElement;
-  if(!parent) return;
-  if(parent.querySelector('[data-st120="quest"]') || parent.querySelector('[data-st120="picker"]')) return;
-  flow.insertAdjacentHTML("beforebegin", st120QuestBoxHtml());
-}
 
 /* Replace renderStartClassMode wrapper so first full render also inserts immediately after,
    but timer ticks use the synchronous st116RefreshFlowOnly above. */
@@ -18574,14 +17531,8 @@ const ST121_ClassFlowCore = {
 };
 
 /* Backward-compatible entry point: left flow now comes from clean core. */
-function st106Flow(){
-  return ST121_ClassFlowCore.render();
-}
 
 /* Anti-jump flow-only refresh now uses the clean core directly. */
-function st116RefreshFlowOnly(){
-  return ST121_ClassFlowCore.refreshOnly();
-}
 
 /* Timer loop: flow only, no right student-card redraw. */
 if(window.ST1062_TimerLoop){
@@ -18604,7 +17555,6 @@ if(window.ST1062_TimerLoop){
 
 /* Full render guard: after first full render, left flow is already clean-core;
    no post-injection needed, so prevent old st120 inject loop from adding duplicates. */
-function st120InjectQuestBox(){}
 
 console.info("ST121 Left Class Flow Clean Core loaded");
 
@@ -18870,13 +17820,7 @@ const ST124_LeftFlow = {
 };
 
 /* Stable entry points */
-function st106Flow(){
-  return ST124_LeftFlow.render();
-}
 
-function st116RefreshFlowOnly(){
-  return ST124_LeftFlow.refreshOnly();
-}
 
 if(window.ST121_ClassFlowCore){
   ST121_ClassFlowCore.render = function(){ return ST124_LeftFlow.render(); };
@@ -19017,7 +17961,6 @@ if(typeof st1063ShowSummary==="function" && !window.__ST124_SUMMARY_MODAL_INSTAL
 }
 
 /* Prevent old post-injection loops from duplicating magic task area */
-function st120InjectQuestBox(){}
 
 console.info("ST124 Stable Left Flow Core loaded");
 
@@ -19319,11 +18262,6 @@ function st1253EnsureBreathLayers(){
 }
 
 const __st1253OldRefresh = typeof st116RefreshFlowOnly === "function" ? st116RefreshFlowOnly : null;
-function st116RefreshFlowOnly(){
-  const r = __st1253OldRefresh ? __st1253OldRefresh() : false;
-  setTimeout(st1253EnsureBreathLayers,0);
-  return r;
-}
 
 setInterval(()=>{
   if(document.body.classList.contains("start-class-mode")){
