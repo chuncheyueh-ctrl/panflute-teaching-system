@@ -6062,6 +6062,28 @@ body.st124-typing .st106-panel{
   will-change:auto!important;
 }
 
+#saveFlashToast{
+  position:fixed;
+  right:20px;
+  bottom:20px;
+  padding:10px 20px;
+  border-radius:999px;
+  background:var(--mint-dark,#5fae91);
+  color:#fff;
+  font-weight:700;
+  font-size:14px;
+  box-shadow:0 8px 22px rgba(0,0,0,.18);
+  opacity:0;
+  transform:translateY(10px);
+  pointer-events:none;
+  transition:opacity .3s ease, transform .3s ease;
+  z-index:99999;
+}
+#saveFlashToast.save-flash-show{
+  opacity:1;
+  transform:translateY(0);
+}
+
 </style>
 
 <style id="st1063-style">
@@ -10195,6 +10217,21 @@ function deleteModeTemplate(id){
   saveState();
   markDirty?.("刪除模式模板");
   render();
+}
+
+function flashSaved(text="✓ 已儲存"){
+  let toast = document.getElementById("saveFlashToast");
+  if(!toast){
+    toast = document.createElement("div");
+    toast.id = "saveFlashToast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = text;
+  clearTimeout(toast.__hideTimer);
+  clearTimeout(toast.__showTimer);
+  toast.classList.remove("save-flash-show");
+  toast.__showTimer = setTimeout(()=>{ toast.classList.add("save-flash-show"); }, 10);
+  toast.__hideTimer = setTimeout(()=>{ toast.classList.remove("save-flash-show"); }, 1800);
 }
 
 function applyModeTemplateToWeeklyPlan(templateId){
@@ -29075,7 +29112,7 @@ ST160_StateGuard.install();
       <div class="lesson-core-field"><label>補充 / 支線任務</label><textarea id="lessonWeeklySideQuest" placeholder="可填寫加強項目、補救重點">${esc(p.sideQuest||'')}</textarea></div>
       <div class="lesson-inline-actions"><button class="lesson-core-btn primary" onclick="lessonSaveWeeklyPlan()">儲存本週主線</button><button class="lesson-core-btn" onclick="lessonSyncWeeklyToToday()">同步文字任務到今天課堂流程</button></div>`;
   };
-  window.lessonSaveWeeklyPlan = function(){ collectWeeklyFromDom(); persist('V15.37 本週主線'); alert('本週主線已儲存。'); try{ render(); }catch(e){} };
+  window.lessonSaveWeeklyPlan = function(){ collectWeeklyFromDom(); persist('V15.37 本週主線'); flashSaved('✓ 本週主線已儲存'); };
   window.lessonSyncWeeklyToToday = function(){
     const rec = collectWeeklyFromDom();
     const old = arr(rec.todayFlow.tasks);
@@ -29110,7 +29147,7 @@ ST160_StateGuard.install();
     root.innerHTML = `<div class="lesson-total"><span>今天課堂流程</span><span id="lessonTodayTotal"></span></div>
       <div class="lesson-core-field"><label>上課開始時間</label><input id="lessonTodayStartTime" type="time" value="${esc(f.startTime||'10:30')}" oninput="lessonUpdateTodayPreview()"></div>
       <div id="lessonTodayTasks"></div>
-      <div class="lesson-inline-actions"><button class="lesson-core-btn" onclick="lessonAddTodayTask()">＋ 新增課堂任務</button><button class="lesson-core-btn primary" onclick="lessonSaveTodayFlow()">儲存今天課堂流程</button></div>
+      <div class="lesson-inline-actions"><button class="lesson-core-btn" onclick="lessonAddTodayTask()">＋ 新增課堂任務</button><button id="lessonSaveTodayFlowBtn" class="lesson-core-btn primary" onclick="lessonSaveTodayFlow()">儲存今天課堂流程</button></div>
       <div class="lesson-flow-notes">
         <div><label>提醒事項</label><textarea id="lessonTodayReminder" placeholder="例如：先檢查高音 Sol。">${esc(f.reminder||'')}</textarea></div>
         <div><label>回家功課</label><textarea id="lessonTodayHomework" placeholder="例如：長音4拍每天3次。">${esc(f.homework||'')}</textarea></div>
@@ -29120,7 +29157,7 @@ ST160_StateGuard.install();
     arr(f.tasks).forEach(t=>window.lessonAddTodayTask(t.title,t.minutes,t.done));
     window.lessonUpdateTodayPreview();
   };
-  window.lessonSaveTodayFlow = function(){ collectTodayFromDom(); persist('V15.37 今天課堂流程'); alert('今天課堂流程已儲存為 lessonRecord。'); try{ render(); }catch(e){} };
+  window.lessonSaveTodayFlow = function(){ collectTodayFromDom(); persist('V15.37 今天課堂流程'); flashSaved('✓ 今天課堂流程已儲存'); };
   window.lessonRenderFixedCurriculum = function(rec=recordFor()){
     const root=document.getElementById('lessonFixedCurriculumCore'); if(!root || !rec) return;
     if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
@@ -29130,9 +29167,9 @@ ST160_StateGuard.install();
       }
       return;
     }
-    root.innerHTML = `<div class="lesson-core-field"><label>固定課綱 / 長期進度</label><textarea id="lessonFixedText" placeholder="例如：音階、節奏、視譜、曲目段落。">${esc(rec.fixedCurriculum?.text||'')}</textarea></div><button class="lesson-core-btn primary" onclick="lessonSaveFixedCurriculum()">儲存固定課綱</button>`;
+    root.innerHTML = `<div class="lesson-core-field"><label>固定課綱 / 長期進度</label><textarea id="lessonFixedText" placeholder="例如：音階、節奏、視譜、曲目段落。">${esc(rec.fixedCurriculum?.text||'')}</textarea></div><button id="lessonSaveFixedCurriculumBtn" class="lesson-core-btn primary" onclick="lessonSaveFixedCurriculum()">儲存固定課綱</button>`;
   };
-  window.lessonSaveFixedCurriculum = function(){ const rec=recordFor(); rec.fixedCurriculum.text=document.getElementById('lessonFixedText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 固定課綱'); alert('固定課綱已儲存。'); };
+  window.lessonSaveFixedCurriculum = function(){ const rec=recordFor(); rec.fixedCurriculum.text=document.getElementById('lessonFixedText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 固定課綱'); flashSaved('✓ 固定課綱已儲存'); };
   window.lessonRenderGrowthHighlights = function(rec=recordFor()){
     const root=document.getElementById('lessonGrowthHighlightsCore'); if(!root || !rec) return;
     if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
@@ -29142,9 +29179,9 @@ ST160_StateGuard.install();
       }
       return;
     }
-    root.innerHTML = `<div class="lesson-core-field"><label>成長亮點</label><textarea id="lessonGrowthText" placeholder="例如：今天節奏穩定、主動幫助同學。">${esc(rec.growthHighlights?.text||'')}</textarea></div><button class="lesson-core-btn primary" onclick="lessonSaveGrowthHighlights()">儲存成長亮點</button>`;
+    root.innerHTML = `<div class="lesson-core-field"><label>成長亮點</label><textarea id="lessonGrowthText" placeholder="例如：今天節奏穩定、主動幫助同學。">${esc(rec.growthHighlights?.text||'')}</textarea></div><button id="lessonSaveGrowthHighlightsBtn" class="lesson-core-btn primary" onclick="lessonSaveGrowthHighlights()">儲存成長亮點</button>`;
   };
-  window.lessonSaveGrowthHighlights = function(){ const rec=recordFor(); rec.growthHighlights.text=document.getElementById('lessonGrowthText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 成長亮點'); alert('成長亮點已儲存。'); };
+  window.lessonSaveGrowthHighlights = function(){ const rec=recordFor(); rec.growthHighlights.text=document.getElementById('lessonGrowthText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 成長亮點'); flashSaved('✓ 成長亮點已儲存'); };
   window.lessonMountAll = function(){ const rec=recordFor(); window.lessonRenderWeeklyPlan(rec); window.lessonRenderTodayFlow(rec); window.lessonRenderFixedCurriculum(rec); window.lessonRenderGrowthHighlights(rec); };
 
   // Start Class reads only today's lessonRecord.
@@ -29542,14 +29579,14 @@ ST160_StateGuard.install();
         ${modeTemplates.length ? `<div class="lesson-core-field"><label>🎛️ 套用模式模板（臨時表演/比賽等突發狀況，跳離課綱用）</label>
           <div class="lesson-inline-actions">
             <select id="lessonWeeklyModeTemplate">${modeTemplates.map(t=>`<option value="${esc(t.id)}">${esc(t.name||t.title||'未命名模板')}</option>`).join('')}</select>
-            <button class="lesson-core-btn gold" onclick="applyModeTemplateToWeeklyPlan(document.getElementById('lessonWeeklyModeTemplate').value)">套用到本週主線</button>
+            <button id="lessonApplyModeTemplateBtn" class="lesson-core-btn gold" onclick="applyModeTemplateToWeeklyPlan(document.getElementById('lessonWeeklyModeTemplate').value)">套用到本週主線</button>
           </div>
         </div>` : `<div class="lesson-empty-note">尚未建立模式模板，可到「設定中心 → 模式模板」建立（例如：音樂會模式、比賽模式）。</div>`}
         <div class="lesson-core-field"><label>本週主題</label><input id="lessonWeeklyTitle" value="${esc(p.title||'')}" placeholder="例如：長音穩定與節奏控制"></div>
         <div class="lesson-core-field"><label>本週目標</label><textarea id="lessonWeeklyGoal" placeholder="這週想達成的能力">${esc(p.goal||'')}</textarea></div>
         <div class="lesson-core-field"><label>本週任務文字欄流（一行一個任務）</label><textarea id="lessonWeeklyTaskText" placeholder="例如：\n呼吸健身房\n長音練習\n習作\n合奏檢查">${esc(taskTextFromWeeklyLocal(p))}</textarea></div>
         <div class="lesson-core-field"><label>補充 / 支線任務</label><textarea id="lessonWeeklySideQuest" placeholder="可填寫加強項目、補救重點">${esc(p.sideQuest||'')}</textarea></div>
-        <div class="lesson-inline-actions"><button class="lesson-core-btn primary" onclick="lessonSaveWeeklyPlan()">儲存本週主線</button><button class="lesson-core-btn" onclick="lessonSyncWeeklyToToday()">同步文字任務到今天課堂流程</button></div>`;
+        <div class="lesson-inline-actions"><button id="lessonSaveWeeklyPlanBtn" class="lesson-core-btn primary" onclick="lessonSaveWeeklyPlan()">儲存本週主線</button><button class="lesson-core-btn" onclick="lessonSyncWeeklyToToday()">同步文字任務到今天課堂流程</button></div>`;
       patchExistingDebugNote();
     };
     window.lessonRenderWeeklyPlan.__v15383Polished = true;
