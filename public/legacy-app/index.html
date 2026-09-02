@@ -30,6 +30,7 @@ window.async = window.async || function(fn){ return fn; };
 
 </script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script>
 const firebaseConfig = {
   apiKey: "AIzaSyA7jsfNZBaAvAp4ENS-gOX2CrAG6m832Ls",
@@ -43,6 +44,9 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const firebaseDb = firebase.database();
+// 資料庫規則現在要求要有登入身分才能讀寫；這裡用「匿名登入」自動在背景取得身分，
+// 使用者不會看到任何登入畫面、也不用輸入帳密。
+firebase.auth().signInAnonymously().catch(function(err){ console.error("Firebase 匿名登入失敗", err); });
 </script>
 
 <style>
