@@ -7525,10 +7525,18 @@ function ensureClassContext(){
     classContext.termId = currentAcademicTermId();
   }
   const schools = activeSchools();
-  const school = schools[0];
-  if((!classContext.schoolId || !schools.some(s => s.id === classContext.schoolId)) && school){
-    classContext.schoolId = school.id;
-    classContext.classId = null;
+  if(!classContext.__manualOverride){
+    const scheduled = typeof findScheduleEntryAt === "function" ? findScheduleEntryAt() : null;
+    if(scheduled && schools.some(s => s.id === scheduled.schoolId)){
+      classContext.schoolId = scheduled.schoolId;
+      classContext.classId = scheduled.classId;
+    }else if(!classContext.schoolId || !schools.some(s => s.id === classContext.schoolId)){
+      const school = schools[0];
+      if(school){
+        classContext.schoolId = school.id;
+        classContext.classId = null;
+      }
+    }
   }
 
   const classes = classesBySchool(classContext.schoolId);
@@ -8195,6 +8203,40 @@ async function finishStartClass(){
   exitStartClassMode();
 }
 
+let __scheduleLastPromptedKey = null;
+function checkScheduleSwitch(){
+  if(typeof startClassMode === "undefined" || !startClassMode) return;
+  if(!document.body.classList.contains("start-class-mode")) return;
+  const entry = typeof findScheduleEntryAt === "function" ? findScheduleEntryAt() : null;
+  if(!entry) return;
+  if(entry.schoolId === classContext.schoolId && entry.classId === classContext.classId) return;
+  const key = entry.id + "_" + today();
+  if(__scheduleLastPromptedKey === key) return;
+  __scheduleLastPromptedKey = key;
+  const label = `${schoolName(entry.schoolId)}｜${className(entry.classId)}（${entry.startTime}-${entry.endTime}）`;
+  const ok = confirm(`時間到了，課表上現在排定的班級是「${label}」。\n如果這堂課的資料還沒儲存，請先按「取消」回去儲存。\n要切換到下一個上課班級嗎？`);
+  if(!ok) return;
+  Promise.resolve(finishStartClass()).then(()=>{
+    classContext.schoolId = entry.schoolId;
+    classContext.classId = entry.classId;
+    classContext.date = today();
+    classContext.__manualOverride = false;
+    enterStartClassMode();
+  }).catch(err=>{ console.warn("課表自動切換儲存失敗", err); });
+}
+setInterval(checkScheduleSwitch, 10000);
+
+function checkScheduleAutoSelect(){
+  if(typeof startClassMode !== "undefined" && startClassMode) return;
+  if(document.body.classList.contains("start-class-mode")) return;
+  if(typeof currentPage !== "undefined" && currentPage !== "classroom") return;
+  if(classContext.__manualOverride) return;
+  const entry = typeof findScheduleEntryAt === "function" ? findScheduleEntryAt() : null;
+  if(!entry) return;
+  if(entry.schoolId === classContext.schoolId && entry.classId === classContext.classId) return;
+  render();
+}
+setInterval(checkScheduleAutoSelect, 10000);
 
 function startClassStudentPhotoHtml(st){
   const url = st.photoUrl || st.photo || st.imageUrl || "";
@@ -9739,13 +9781,13 @@ function renderClassroom(){
           </div>
           <div class="f3">
             <label>學校</label>
-            <select onchange="classContext.schoolId=this.value; classContext.classId=null; render()">
+            <select onchange="classContext.schoolId=this.value; classContext.classId=null; classContext.__manualOverride=true; render()">
               ${optionList(activeSchools(),classContext.schoolId)}
             </select>
           </div>
           <div class="f3">
             <label>課程單位</label>
-            <select onchange="classContext.classId=this.value; render()">
+            <select onchange="classContext.classId=this.value; classContext.__manualOverride=true; render()">
               ${optionList(classesBySchool(classContext.schoolId),classContext.classId)}
             </select>
           </div>
@@ -10136,6 +10178,61 @@ function getWeeklyMainlineByDate(dateValue){
 
 
 /* LESSON MODULE: Mode Templates */
+function ensureClassSchedule(){
+  if(!Array.isArray(state.classSchedule)) state.classSchedule = [];
+  return state.classSchedule;
+}
+const SCHEDULE_WEEKDAY_NAMES = ["日","一","二","三","四","五","六"];
+function scheduleWeekdayOptions(selected){
+  return [1,2,3,4,5,6,0].map(d=>`<option value="${d}" ${Number(selected)===d?"selected":""}>星期${SCHEDULE_WEEKDAY_NAMES[d]}</option>`).join("");
+}
+function findScheduleEntryAt(date=new Date()){
+  const day = date.getDay();
+  const hhmm = String(date.getHours()).padStart(2,"0")+":"+String(date.getMinutes()).padStart(2,"0");
+  return ensureClassSchedule().find(e=>e.active!==false && Number(e.dayOfWeek)===day && e.startTime && e.endTime && e.startTime<=hhmm && hhmm<e.endTime) || null;
+}
+function scheduleHourOptions(selected){
+  return Array.from({length:24},(_,h)=>{
+    const v = String(h).padStart(2,"0");
+    return `<option value="${v}" ${v===selected?"selected":""}>${v}</option>`;
+  }).join("");
+}
+function scheduleMinuteOptions(selected){
+  return Array.from({length:60},(_,m)=>{
+    const v = String(m).padStart(2,"0");
+    return `<option value="${v}" ${v===selected?"selected":""}>${v}</option>`;
+  }).join("");
+}
+function addScheduleEntry(){
+  const schoolId = document.getElementById("newScheduleSchool")?.value || "";
+  const classId = document.getElementById("newScheduleClass")?.value || "";
+  const dayOfWeek = Number(document.getElementById("newScheduleDay")?.value ?? 1);
+  const startTime = `${document.getElementById("newScheduleStartHour")?.value || "08"}:${document.getElementById("newScheduleStartMin")?.value || "00"}`;
+  const endTime = `${document.getElementById("newScheduleEndHour")?.value || "08"}:${document.getElementById("newScheduleEndMin")?.value || "40"}`;
+  if(!schoolId || !classId) return alert("請選擇學校與課程單位。");
+  if(!startTime || !endTime) return alert("請填寫開始與結束時間。");
+  if(startTime >= endTime) return alert("結束時間要晚於開始時間。");
+  ensureClassSchedule().push({id:makeId(), schoolId, classId, dayOfWeek, startTime, endTime, active:true});
+  saveState();
+  markDirty?.("新增課表時段");
+  render();
+}
+function toggleScheduleEntry(id){
+  const e = ensureClassSchedule().find(x=>x.id===id);
+  if(!e) return;
+  e.active = e.active===false ? true : false;
+  saveState();
+  markDirty?.("停用/啟用課表時段");
+  render();
+}
+function deleteScheduleEntry(id){
+  if(!confirm("確定刪除這個課表時段？")) return;
+  state.classSchedule = ensureClassSchedule().filter(x=>x.id!==id);
+  saveState();
+  markDirty?.("刪除課表時段");
+  render();
+}
+
 function ensureModeTemplates(){
   if(!Array.isArray(state.modeTemplates)){
     state.modeTemplates = [
@@ -11646,6 +11743,7 @@ function renderSettings(){
         ["growth","成長設定"],
         ["curriculum","課綱母版"],
         ["modeTemplates","模式模板"],
+        ["schedule","課表"],
         ["backup","備份"]
       ].map(([id,name])=>`<button class="${settingsTab===id ? "active" : ""}" onclick="settingsTab='${id}'; render()">${name}</button>`).join("")}
     </div>
@@ -11662,6 +11760,7 @@ function renderSettings(){
   if(settingsTab === "growth") renderGrowthSettings();
   if(settingsTab === "curriculum") renderCurriculumSettings();
   if(settingsTab === "modeTemplates") renderModeTemplateSettings();
+  if(settingsTab === "schedule") renderScheduleSettings();
   if(settingsTab === "backup") renderBackupSettings();
 }
 
@@ -12691,6 +12790,75 @@ function renderCurriculumSettings(){
 
 
 
+
+function renderScheduleSettings(){
+  const pickSchoolId = window.__scheduleSchoolPick && activeSchools().some(s=>s.id===window.__scheduleSchoolPick)
+    ? window.__scheduleSchoolPick
+    : (activeSchools()[0]?.id || "");
+  window.__scheduleSchoolPick = pickSchoolId;
+  const pickClasses = classesBySchool(pickSchoolId);
+  const schedule = ensureClassSchedule().slice().sort((a,b)=>
+    (Number(a.dayOfWeek)===0?7:Number(a.dayOfWeek)) - (Number(b.dayOfWeek)===0?7:Number(b.dayOfWeek))
+    || String(a.startTime||"").localeCompare(String(b.startTime||""))
+  );
+  document.getElementById("settingsBody").innerHTML = `
+    <section class="card">
+      <h3>🗓️ 課表設定</h3>
+      <div class="note">設定好每個學校/班級固定在星期幾、幾點到幾點上課。設定後，打開「上課介面」會自動幫你選好對的學校與課程；在「開始上課」模式中，如果時間到了下一堂課，也會跳出提醒問你要不要切換，不會沒說一聲就自己跳走。</div>
+      <div class="row">
+        <div class="f3">
+          <label>學校</label>
+          <select id="newScheduleSchool" onchange="window.__scheduleSchoolPick=this.value; render()">${optionList(activeSchools(), pickSchoolId)}</select>
+        </div>
+        <div class="f3">
+          <label>課程單位</label>
+          <select id="newScheduleClass">${optionList(pickClasses, pickClasses[0]?.id || "")}</select>
+        </div>
+        <div class="f2">
+          <label>星期</label>
+          <select id="newScheduleDay">${scheduleWeekdayOptions(1)}</select>
+        </div>
+        <div class="f2">
+          <label>開始時間（24小時制）</label>
+          <div style="display:flex;align-items:center;gap:4px">
+            <select id="newScheduleStartHour" style="flex:1">${scheduleHourOptions("08")}</select>
+            <span>:</span>
+            <select id="newScheduleStartMin" style="flex:1">${scheduleMinuteOptions("00")}</select>
+          </div>
+        </div>
+        <div class="f2">
+          <label>結束時間（24小時制）</label>
+          <div style="display:flex;align-items:center;gap:4px">
+            <select id="newScheduleEndHour" style="flex:1">${scheduleHourOptions("08")}</select>
+            <span>:</span>
+            <select id="newScheduleEndMin" style="flex:1">${scheduleMinuteOptions("40")}</select>
+          </div>
+        </div>
+        <div class="f12"><button class="btn primary" onclick="addScheduleEntry()">新增時段</button></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>目前課表</h3>
+      <table class="table">
+        <tr><th>星期</th><th>時間</th><th>學校</th><th>課程單位</th><th>狀態</th><th>操作</th></tr>
+        ${schedule.map(e=>`
+          <tr class="${e.active===false?'inactive-row':''}">
+            <td>星期${SCHEDULE_WEEKDAY_NAMES[Number(e.dayOfWeek)] ?? ""}</td>
+            <td>${escapeHtml(e.startTime||'')} - ${escapeHtml(e.endTime||'')}</td>
+            <td>${escapeHtml(schoolName(e.schoolId))}</td>
+            <td>${escapeHtml(className(e.classId))}</td>
+            <td>${e.active===false ? "停用" : "啟用"}</td>
+            <td>
+              <button class="btn ${e.active===false?'primary':'ghost'} small" onclick="toggleScheduleEntry('${e.id}')">${e.active===false ? "啟用" : "停用"}</button>
+              <button class="btn red small" onclick="deleteScheduleEntry('${e.id}')">刪除</button>
+            </td>
+          </tr>
+        `).join("") || `<tr><td colspan="6">尚未設定課表。</td></tr>`}
+      </table>
+    </section>
+  `;
+}
 
 function renderModeTemplateSettings(){
   const templates = ensureModeTemplates();
