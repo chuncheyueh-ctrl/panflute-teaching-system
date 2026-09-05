@@ -13008,7 +13008,7 @@ function renderBackupSettings(){
       <button class="btn primary" onclick="exportBackup()">匯出備份 JSON</button>
       <hr>
       <label>匯入備份 JSON</label>
-      <input type="file" accept="application/json" onchange="importBackup(event)">
+      <input type="file" accept="application/json" onchange="importBackup(this.files[0])">
     </section>
 
     <section class="card">
