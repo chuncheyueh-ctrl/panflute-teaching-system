@@ -8230,6 +8230,7 @@ function checkScheduleAutoSelect(){
   if(typeof startClassMode !== "undefined" && startClassMode) return;
   if(document.body.classList.contains("start-class-mode")) return;
   if(typeof currentPage !== "undefined" && currentPage !== "classroom") return;
+  if(typeof classroomTab !== "undefined" && classroomTab === "notes") return;
   if(classContext.__manualOverride) return;
   const entry = typeof findScheduleEntryAt === "function" ? findScheduleEntryAt() : null;
   if(!entry) return;
