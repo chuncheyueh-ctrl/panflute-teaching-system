@@ -8082,6 +8082,7 @@ let startClassTasks = {};
 function enterStartClassMode(){
   startClassMode = true;
   if(typeof quickClassMode !== "undefined") quickClassMode = false;
+  if(typeof st120SelectedTaskIndex !== "undefined") st120SelectedTaskIndex = null;
   document.body.classList.remove("quick-mode");
   document.body.classList.add("start-class-mode");
   prepareStartClassData();
@@ -15407,7 +15408,7 @@ const ST1062_TaskCardRenderer = {
           ${state.icon}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(state.title)} <span class="st106-badge">${state.minutes} 分鐘</span>${this.badges(state)}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===state.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${state.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(state.title)} <span class="st106-badge">${state.minutes} 分鐘</span>${this.badges(state)}</div>
           <div class="st106-task-meta">${ST1062_TaskEngine.secondsToTime(state.start)} - ${ST1062_TaskEngine.secondsToTime(state.end)}｜${st106Esc(state.label)}</div>
           ${this.suggestion(state)}
         </div>
@@ -17428,15 +17429,21 @@ function st120CurrentTaskIndex(){
   const active = ranges.find(r=>now>=r.start && now<r.end);
   return active ? active.idx : 0;
 }
+let st120SelectedTaskIndex = null;
+function st120SelectTask(idx){
+  st120SelectedTaskIndex = Number(idx);
+  try{ renderStartClassMode(); }catch(e){}
+}
 function st120AttrPickerHtml(){
   const tasks = st120Tasks();
   if(!tasks.length) return "";
-  const idx = Math.min(st120CurrentTaskIndex(), tasks.length-1);
+  const hasManualPick = Number.isInteger(st120SelectedTaskIndex) && tasks[st120SelectedTaskIndex];
+  const idx = Math.min(hasManualPick ? st120SelectedTaskIndex : st120CurrentTaskIndex(), tasks.length-1);
   const task = tasks[idx] || tasks[0];
   const current = st120NormalizeTaskAttr(task).magicAttr || "none";
   return `
     <div class="st120-task-attr-picker" data-st120="picker">
-      <div class="st120-task-attr-title">🪄 目前任務屬性：${task ? st106Esc(task.title) : ""}</div>
+      <div class="st120-task-attr-title">🪄 目前任務屬性：${task ? st106Esc(task.title) : ""}${hasManualPick ? `　<a onclick="st120SelectedTaskIndex=null; try{renderStartClassMode();}catch(e){}" style="cursor:pointer;font-size:12px;font-weight:normal;text-decoration:underline">（跳回現在時段）</a>` : ""}</div>
       <div class="st120-attr-buttons">
         ${ST120_TASK_ATTRS.map(a=>`
           <button class="st120-attr-btn ${current===a.id ? "active" : ""}"
