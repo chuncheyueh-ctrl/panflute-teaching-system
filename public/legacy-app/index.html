@@ -520,9 +520,9 @@ hr{border:0;border-top:1px solid var(--line);margin:18px 0}
 
 /* v3.4.5 學生照片與課程清爽版 */
 .student-avatar{
-  width:54px;
-  height:54px;
-  border-radius:18px;
+  width:92px;
+  height:92px;
+  border-radius:24px;
   object-fit:cover;
   border:2px solid #eadfcb;
   background:#fff8df;
@@ -20722,8 +20722,27 @@ const ST160_StateGuard = {
           console.warn("ST160 blocked invalid save",validation);
           return;
         }
-        oldSave.apply(this,arguments);
-        ST160_StateGuard.clearDirty();
+        try{
+          oldSave.apply(this,arguments);
+          ST160_StateGuard.clearDirty();
+        }catch(e){
+          const msg = String(e?.name || '') + ' ' + String(e?.message || e || '');
+          if(!/QuotaExceeded|quota|exceeded/i.test(msg)){
+            console.error("ST160 raw save failed", e);
+            return;
+          }
+          try{ window.ST150QuotaCleanupNow?.(0); }catch(e2){}
+          try{
+            oldSave.apply(this,arguments);
+            ST160_StateGuard.clearDirty();
+            return;
+          }catch(e3){}
+          console.warn("ST160 raw save failed after quota cleanup retry", e);
+          if(!window.__ST160_QUOTA_ALERT_SHOWN__){
+            window.__ST160_QUOTA_ALERT_SHOWN__ = true;
+            alert("⚠️ 裝置儲存空間已滿，剛剛的修改可能沒有存進去！\n請立刻到「設定中心 → 備份」匯出一份備份，並清除一些舊資料或改用雲端同步。");
+          }
+        }
       },150);
     };
   },
@@ -27238,7 +27257,7 @@ ST160_StateGuard.install();
       const latest = localStorage.getItem('ST150_LATEST_SNAPSHOT');
       const keepSet = new Set();
       if(latest) keepSet.add(latest);
-      keys.slice(-keep).forEach(k => keepSet.add(k));
+      (keep>0 ? keys.slice(-keep) : []).forEach(k => keepSet.add(k));
       let removed = 0;
       for(const k of keys){
         if(!keepSet.has(k)){
@@ -27616,7 +27635,7 @@ ST160_StateGuard.install();
     try{
       const keys=snapshotKeys();
       const latest=localStorage.getItem('ST150_LATEST_SNAPSHOT');
-      const keepSet=new Set(keys.slice(-keep));
+      const keepSet=new Set(keep>0 ? keys.slice(-keep) : []);
       if(latest) keepSet.add(latest);
       for(const k of keys){
         if(!keepSet.has(k)){ localStorage.removeItem(k); removed++; }
