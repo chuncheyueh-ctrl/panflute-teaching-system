@@ -10193,6 +10193,18 @@ function findScheduleEntryAt(date=new Date()){
   const hhmm = String(date.getHours()).padStart(2,"0")+":"+String(date.getMinutes()).padStart(2,"0");
   return ensureClassSchedule().find(e=>e.active!==false && Number(e.dayOfWeek)===day && e.startTime && e.endTime && e.startTime<=hhmm && hhmm<e.endTime) || null;
 }
+/* 給「今天課堂流程」新建紀錄時當預設開始時間用：只看這個學校/班級在課表上
+   星期幾排定的時間，不像 findScheduleEntryAt() 要求「現在」剛好落在時段內。 */
+function scheduleStartTimeFor(schoolId, classId, dateStr){
+  try{
+    if(!schoolId || !classId) return null;
+    const d = dateStr ? new Date(dateStr + "T00:00:00") : new Date();
+    if(isNaN(d.getTime())) return null;
+    const day = d.getDay();
+    const entry = ensureClassSchedule().find(e=>e.active!==false && String(e.schoolId)===String(schoolId) && String(e.classId)===String(classId) && Number(e.dayOfWeek)===day && e.startTime);
+    return entry ? entry.startTime : null;
+  }catch(e){ return null; }
+}
 function scheduleHourOptions(selected){
   return Array.from({length:24},(_,h)=>{
     const v = String(h).padStart(2,"0");
@@ -29161,7 +29173,7 @@ ST160_StateGuard.install();
       termId:ctx.termId || '',
       date:ctx.date || todayStr(),
       weeklyPlan:{ title:'', goal:'', taskText:'', sideQuest:'' },
-      todayFlow:{ startTime:'10:30', tasks:[{title:'暖身',minutes:10,done:false},{title:'本週主線',minutes:10,done:false},{title:'個別檢查',minutes:10,done:false},{title:'收尾回饋',minutes:10,done:false}], reminder:'', homework:'', note:'' },
+      todayFlow:{ startTime:(typeof scheduleStartTimeFor==='function' && scheduleStartTimeFor(ctx.schoolId, ctx.classId, ctx.date)) || '10:30', tasks:[{title:'暖身',minutes:10,done:false},{title:'本週主線',minutes:10,done:false},{title:'個別檢查',minutes:10,done:false},{title:'收尾回饋',minutes:10,done:false}], reminder:'', homework:'', note:'' },
       fixedCurriculum:{ text:'' },
       growthHighlights:{ text:'' }
     };
@@ -29866,7 +29878,8 @@ ST160_StateGuard.install();
   }
   function uid(){ return 'lesson_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); }
   function defaultRec(c=ctx()){
-    return {id:uid(), source:'v15.39', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), schoolId:c.schoolId||'', classId:c.classId||'', termId:c.termId||'', date:c.date||todayStr(), weeklyPlan:{title:'',goal:'',taskText:'',sideQuest:''}, todayFlow:{startTime:'10:30',tasks:[],reminder:'',homework:'',note:''}, fixedCurriculum:{text:''}, growthHighlights:{text:''}};
+    const startTime = (typeof scheduleStartTimeFor==='function' && scheduleStartTimeFor(c.schoolId, c.classId, c.date)) || '10:30';
+    return {id:uid(), source:'v15.39', createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), schoolId:c.schoolId||'', classId:c.classId||'', termId:c.termId||'', date:c.date||todayStr(), weeklyPlan:{title:'',goal:'',taskText:'',sideQuest:''}, todayFlow:{startTime,tasks:[],reminder:'',homework:'',note:''}, fixedCurriculum:{text:''}, growthHighlights:{text:''}};
   }
   function same(a,c){ return (!c.classId || a.classId===c.classId) && (!c.termId || !a.termId || a.termId===c.termId) && iso(a.date)===c.date; }
   function records(){
@@ -29907,7 +29920,7 @@ ST160_StateGuard.install();
       rec.termId = rec.termId || c.termId || '';
       rec.date = iso(rec.date || c.date) || c.date;
       rec.weeklyPlan = rec.weeklyPlan || {title:'',goal:'',taskText:'',sideQuest:''};
-      rec.todayFlow = rec.todayFlow || {startTime:'10:30',tasks:[],reminder:'',homework:'',note:''};
+      rec.todayFlow = rec.todayFlow || {startTime:(typeof scheduleStartTimeFor==='function' && scheduleStartTimeFor(rec.schoolId, rec.classId, rec.date)) || '10:30',tasks:[],reminder:'',homework:'',note:''};
       rec.fixedCurriculum = rec.fixedCurriculum || {text:''};
       rec.growthHighlights = rec.growthHighlights || {text:''};
     }
@@ -29983,11 +29996,18 @@ ST160_StateGuard.install();
     const growth=document.getElementById('lessonGrowthText');
     if(growth) rec.growthHighlights.text=growth.value||'';
 
-    rec.updatedAt = new Date().toISOString();
-    try{ if(typeof saveState === 'function') saveState(); }catch(e){}
-    try{ if(typeof markDirty === 'function') markDirty('V15.39 課程紀錄完整同步'); }catch(e){}
     const after={weeklyPlan:rec.weeklyPlan,todayFlow:rec.todayFlow,fixedCurriculum:rec.fixedCurriculum,growthHighlights:rec.growthHighlights};
-    return {ok:true,version:VERSION,reason,recordId:rec.id,date:rec.date,classId:rec.classId,changed:JSON.stringify(before)!==JSON.stringify(after),record:rec};
+    const changed = JSON.stringify(before)!==JSON.stringify(after);
+    // 只有真的有變化才存檔、標記為已修改。以前這裡是不管有沒有變化都會標記，
+    // 配合「render() 之後 120ms 自動跑一次 syncFromDom」的機制，等於每次重繪都會
+    // 被誤判成「有未上傳的修改」，再加上編輯後幾秒就自動上傳雲端、上傳成功又會
+    // 觸發一次 render()，就形成了每隔幾秒鐘不斷重繪、永遠停不下來的迴圈。
+    if(changed){
+      rec.updatedAt = new Date().toISOString();
+      try{ if(typeof saveState === 'function') saveState(); }catch(e){}
+      try{ if(typeof markDirty === 'function') markDirty('V15.39 課程紀錄完整同步'); }catch(e){}
+    }
+    return {ok:true,version:VERSION,reason,recordId:rec.id,date:rec.date,classId:rec.classId,changed,record:rec};
   }
 
   function wrap(name, afterRender=false){
