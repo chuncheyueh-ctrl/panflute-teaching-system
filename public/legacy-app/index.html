@@ -15303,6 +15303,20 @@ const ST1062_TaskEngine = {
       return {idx,title:t.title,minutes:t.minutes,start,end};
     });
   },
+  /* 這一整套時間/超時計算原本只比對「現在幾點幾分」跟「任務排定幾點幾分」，
+     完全不管 classContext.date 是不是今天——如果提前查看明天（或以後）的課，
+     或回顧很久以前的課，會被誤判成「已經落後 XX 分鐘」。這裡加一個日期比對，
+     只有 classContext.date === 今天，才照原本的時間軸邏輯算「現在／落後」。 */
+  dateCompareToday(){
+    try{
+      if(typeof classContext === 'undefined' || !classContext || !classContext.date) return 0;
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      const a = String(classContext.date);
+      if(a === todayStr) return 0;
+      return a > todayStr ? 1 : -1;
+    }catch(e){ return 0; }
+  },
   fillPercent(range, now){
     if(!range) return 0;
     if(now <= range.start) return 0;
@@ -15311,6 +15325,9 @@ const ST1062_TaskEngine = {
   },
   progress(ranges, now){
     if(!ranges?.length) return 0;
+    const cmp = this.dateCompareToday();
+    if(cmp > 0) return 0;
+    if(cmp < 0) return 100;
     const start = ranges[0].start;
     const end = ranges[ranges.length-1].end;
     if(now <= start) return 0;
@@ -15318,6 +15335,9 @@ const ST1062_TaskEngine = {
     return Math.round((now-start)/(end-start)*100);
   },
   activeName(ranges, now){
+    const cmp = this.dateCompareToday();
+    if(cmp > 0) return "尚未開始";
+    if(cmp < 0) return ranges?.length ? "本堂課已完成" : "尚未開始";
     const active = (ranges || []).find(r=>now>=r.start && now<r.end);
     if(active) return active.title;
     if(ranges?.length && now >= ranges[ranges.length-1].end) return "本堂課已完成";
@@ -15325,6 +15345,7 @@ const ST1062_TaskEngine = {
   },
   overdueSeconds(range, task, now){
     if(this.status(task) !== "pending") return 0;
+    if(this.dateCompareToday() !== 0) return 0;
     return Math.max(0, now - range.end);
   },
   overdueLevel(range, task, now){
@@ -15336,8 +15357,9 @@ const ST1062_TaskEngine = {
   runtime(range, task, ctx){
     const status = this.status(task);
     const now = ctx.now;
-    const current = now >= range.start && now < range.end;
-    const past = now >= range.end;
+    const cmp = this.dateCompareToday();
+    const current = cmp === 0 && now >= range.start && now < range.end;
+    const past = cmp < 0 ? true : (cmp === 0 && now >= range.end);
     const next = !current && !past && range.idx === ctx.nextIdx;
     const overdueSec = this.overdueSeconds(range, task, now);
     const overdue = this.overdueLevel(range, task, now);
