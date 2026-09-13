@@ -30233,21 +30233,23 @@ ST160_StateGuard.install();
     return {ok:true,version:VERSION,target:true,context:c,templates:list.length,binding:b,template:{id:t.id,name:t.name,weeks:arr(t.weeks).length},weekNo:no,currentWeek:week?{week:week.week,title:week.title||week.name,items:items.length}:null};
   }
 
+  // V15.39.3: 拿掉這裡的 render()/lessonMountAll() 互相呼叫。
+  // 原本 lessonMountAll -> setTimeout(render) -> (V15.38.1 render 包裝) -> lessonMountAll -> ...
+  // 會形成沒有終點的連鎖重繪（每 30~150ms 觸發一次，只要停在上課介面就永遠不會停），
+  // 會拖垮舊電腦、造成畫面閃爍，也會讓「今天課堂流程」在重繪過程中被讀到暫時性的
+  // DOM 狀態再寫回 state，導致任務清單越存越多份。lessonMountAll() 本身已經會呼叫
+  // lessonRenderFixedCurriculum()，不需要再額外觸發一次全頁 render()。
   const oldLessonMountAll = window.lessonMountAll;
   if(typeof oldLessonMountAll === 'function' && !oldLessonMountAll.__v15391FixedCurriculumWrapped){
     window.lessonMountAll = function(...args){
-      const r=oldLessonMountAll.apply(this,args);
-      setTimeout(()=>{ try{ render(); }catch(e){ console.warn('V15.39.1 fixed curriculum render failed', e); } },30);
-      return r;
+      return oldLessonMountAll.apply(this,args);
     };
     window.lessonMountAll.__v15391FixedCurriculumWrapped = true;
   }
   const oldRender = window.render;
   if(typeof oldRender === 'function' && !oldRender.__v15391FixedCurriculumWrapped){
     window.render = function(...args){
-      const r=oldRender.apply(this,args);
-      setTimeout(()=>{ try{ if(window.currentPage==='classroom' || document.body.innerText.includes('固定課綱')) render(); }catch(e){} },120);
-      return r;
+      return oldRender.apply(this,args);
     };
     window.render.__v15391FixedCurriculumWrapped = true;
   }
