@@ -30443,5 +30443,160 @@ ST160_StateGuard.install();
 })();
 </script>
 
+<script>
+/* =========================================================
+   V15.40 CLOUD-FIRST LIVE SYNC
+   ---------------------------------------------------------
+   問題：多裝置（家裡筆電常駐開著＋學校電腦＋iPad）各自只認本機
+   localStorage，雲端只有手動按「上傳/讀取」或每 10 分鐘背景上傳
+   才會動，而且判斷「要不要蓋過去」只比較時間戳記、不比內容，
+   常常變成「後上傳的舊資料蓋掉別人剛存的新資料」。
+
+   做法（不改資料結構，只改「什麼時候同步」）：
+   1. 用 Firebase 即時監聽（.on('value')）取代原本只靠手動/定時的
+      單次讀取：只要這台裝置目前沒有未上傳的修改、也沒有正在打字，
+      雲端一有更新就自動套用，不用手動按「讀取雲端」。
+   2. 存檔後不用等 10 分鐘，幾秒後就自動上傳（沿用原本的
+      guardedFirebaseUpload，裝置鎖與時間戳記防衛機制都還在）。
+   3. 如果這台裝置剛好有未上傳的修改、又偵測到雲端有別人的更新，
+      不會硬蓋過去，只跳一個非阻斷的小提示讓使用者自己選。
+   不動：原本的手動按鈕、裝置鎖、10 分鐘背援上傳、離開頁面提示、
+   資料結構（還是一整包 state 上傳/下載）。
+   ========================================================= */
+(function(){
+  const VERSION = 'V15.40 Cloud-First Live Sync';
+  if(window.__V1540_CLOUD_FIRST_SYNC__) return;
+  window.__V1540_CLOUD_FIRST_SYNC__ = true;
+  if(typeof firebase === 'undefined' || typeof firebaseDb === 'undefined') return;
+
+  const metrics = { applied:0, skippedDirty:0, ownEcho:0, autoUploads:0, errors:0 };
+  let lastAppliedCloudUpdatedAt = 0;
+  let selfUploadUntil = 0;
+
+  function localHasUnsyncedChanges(){
+    try{
+      const lastChange = Number(state?.backupMeta?.lastLocalChangeMs || 0);
+      const lastUpload = Number(state?.backupMeta?.lastFirebaseUploadMs || 0);
+      return lastChange > lastUpload + 1000;
+    }catch(e){ return false; }
+  }
+
+  function isEditingNow(){
+    const el = document.activeElement;
+    return !!(el && /^(TEXTAREA|INPUT|SELECT)$/.test(el.tagName || ''));
+  }
+
+  function applyCloudState(data){
+    try{
+      state = migrateState(data.state);
+      ensureBackupMeta();
+      state.backupMeta.lastFirebaseDownloadAt = localIsoLikeString();
+      state.backupMeta.lastFirebaseDownloadMs = Date.now();
+      state.backupMeta.lastLocalChangeMs = Number(data.updatedAt || Date.now());
+      saveState();
+      syncStatus.dirty = false;
+      syncStatus.cloudIsNewer = false;
+      syncStatus.lastError = '';
+      syncStatus.lastFirebaseSyncAt = state.backupMeta.lastFirebaseDownloadAt;
+      syncStatus.cloudUpdatedAt = Number(data.updatedAt || 0);
+      hideCloudWarning?.();
+      document.getElementById('cloudLiveUpdateBox')?.remove();
+      render();
+      renderSyncStatus();
+      metrics.applied++;
+    }catch(e){
+      metrics.errors++;
+      console.warn('V15.40 applyCloudState failed', e);
+    }
+  }
+
+  function showLiveUpdateBanner(){
+    let box = document.getElementById('cloudLiveUpdateBox');
+    if(!box){
+      box = document.createElement('div');
+      box.id = 'cloudLiveUpdateBox';
+      box.className = 'cloud-warning';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = `
+      <div>☁️ 其他裝置剛上傳了新版本</div>
+      <div class="note" style="margin-top:6px">這台裝置目前有尚未上傳的修改，先幫你保留著，沒有自動蓋掉任何東西。</div>
+      <div class="sync-conflict-actions">
+        <button class="btn gold" onclick="document.getElementById('cloudLiveUpdateBox')?.remove(); firebaseDownloadAll()">⬇️ 改用雲端最新版（會蓋掉這台的修改）</button>
+        <button class="btn primary" onclick="document.getElementById('cloudLiveUpdateBox')?.remove(); guardedFirebaseUpload()">⬆️ 先上傳這台的修改</button>
+        <button class="btn red" onclick="document.getElementById('cloudLiveUpdateBox')?.remove()">稍後再說</button>
+      </div>`;
+  }
+
+  function onCloudValue(snap){
+    try{
+      if(!snap || !snap.exists()) return;
+      const data = snap.val();
+      if(!data || !data.state) return;
+      const updatedAt = Number(data.updatedAt || 0);
+      if(!updatedAt || updatedAt <= lastAppliedCloudUpdatedAt) return;
+
+      if(Date.now() < selfUploadUntil){
+        metrics.ownEcho++;
+        lastAppliedCloudUpdatedAt = updatedAt;
+        return;
+      }
+      if(localHasUnsyncedChanges() || isEditingNow()){
+        metrics.skippedDirty++;
+        lastAppliedCloudUpdatedAt = updatedAt;
+        showLiveUpdateBanner();
+        return;
+      }
+      lastAppliedCloudUpdatedAt = updatedAt;
+      applyCloudState(data);
+    }catch(e){
+      metrics.errors++;
+      console.warn('V15.40 onCloudValue failed', e);
+    }
+  }
+
+  try{
+    firebaseDb.ref('battleSystem/main').on('value', onCloudValue);
+  }catch(e){
+    console.warn('V15.40 realtime listener attach failed', e);
+  }
+
+  const oldUploadAll = window.firebaseUploadAll;
+  if(typeof oldUploadAll === 'function' && !oldUploadAll.__v1540Wrapped){
+    window.firebaseUploadAll = async function(...args){
+      const r = await oldUploadAll.apply(this, args);
+      selfUploadUntil = Date.now() + 4000;
+      return r;
+    };
+    window.firebaseUploadAll.__v1540Wrapped = true;
+  }
+
+  let autoUploadTimer = null;
+  const oldMarkDirty = window.markDirty;
+  if(typeof oldMarkDirty === 'function' && !oldMarkDirty.__v1540Wrapped){
+    window.markDirty = function(...args){
+      const r = oldMarkDirty.apply(this, args);
+      clearTimeout(autoUploadTimer);
+      autoUploadTimer = setTimeout(()=>{
+        if(syncStatus.dirty && !syncStatus.syncing && !isEditingNow()){
+          metrics.autoUploads++;
+          guardedFirebaseUpload(true);
+        }
+      }, 8000);
+      return r;
+    };
+    window.markDirty.__v1540Wrapped = true;
+  }
+
+  window.CloudFirstSyncProbe = function(){
+    const r = { version:VERSION, metrics, lastAppliedCloudUpdatedAt, localHasUnsyncedChanges:localHasUnsyncedChanges(), isEditingNow:isEditingNow(), syncStatus:{...syncStatus} };
+    console.log('V15.40 CloudFirstSyncProbe', r);
+    return r;
+  };
+
+  console.info(`${VERSION} loaded. 可用：CloudFirstSyncProbe()`);
+})();
+</script>
+
 </body>
 </html>
