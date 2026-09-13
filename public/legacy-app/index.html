@@ -17981,7 +17981,7 @@ const ST124_LeftFlow = {
           ${window.ST1062_TaskEngine?.statusIcon?.(s.status) || (s.status==="done"?"✓":s.status==="carry"?"↷":"○")}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===range.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${range.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
           <div class="st106-task-meta">${this.timeRange(range)}｜${window.ST1062_TaskEngine?.statusLabel?.(s.status) || (s.status==="done"?"已完成":s.status==="carry"?"保留至下次":"未完成")}</div>
           ${suggestion}
         </div>
@@ -18265,7 +18265,7 @@ if(window.ST124_LeftFlow && !window.__ST1251_INSTALLED__){
           ${window.ST1062_TaskEngine?.statusIcon?.(s.status) || (s.status==="done"?"✓":s.status==="carry"?"↷":"○")}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===range.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${range.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
           <div class="st106-task-meta">${this.timeRange(range)}｜${window.ST1062_TaskEngine?.statusLabel?.(s.status) || (s.status==="done"?"已完成":s.status==="carry"?"保留至下次":"未完成")}</div>
           ${suggestion}
         </div>
@@ -18399,7 +18399,7 @@ if(window.ST124_LeftFlow && !window.__ST1252_INSTALLED__){
           ${window.ST1062_TaskEngine?.statusIcon?.(s.status) || (s.status==="done"?"✓":s.status==="carry"?"↷":"○")}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===range.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${range.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
           <div class="st106-task-meta">${this.timeRange(range)}｜${window.ST1062_TaskEngine?.statusLabel?.(s.status) || (s.status==="done"?"已完成":s.status==="carry"?"保留至下次":"未完成")}</div>
           ${suggestion}
         </div>
@@ -18777,7 +18777,7 @@ const ST131_TaskRenderer = {
           ${ST130_TaskEngine.statusIcon(s.status)}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===range.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${range.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
           <div class="st106-task-meta">${ST130_TaskEngine.timeRange(range)}｜${ST130_TaskEngine.statusLabel(s.status)}</div>
           ${suggestion}
         </div>
@@ -19279,7 +19279,7 @@ if(window.ST131_TaskRenderer && window.ST130_TaskEngine && !window.__ST135_RENDE
           ${ST130_TaskEngine.statusIcon(s.status)}
         </button>
         <div>
-          <div class="st106-task-title">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
+          <div class="st106-task-title" style="cursor:pointer${typeof st120SelectedTaskIndex!=="undefined" && st120SelectedTaskIndex===range.idx ? ";text-decoration:underline" : ""}" onclick="if(typeof st120SelectTask==='function') st120SelectTask(${range.idx})" title="點一下：選這個任務來設定魔法屬性">${st106Esc(s.task.title || range.title || "未命名任務")} ${badges}</div>
           <div class="st106-task-meta">${ST130_TaskEngine.timeRange(range)}｜${ST130_TaskEngine.statusLabel(s.status)}</div>
           ${suggestion}
         </div>
@@ -29207,7 +29207,15 @@ ST160_StateGuard.install();
     rec.date = iso(rec.date) || todayStr();
     rec.weeklyPlan = {...blankRecord(rec).weeklyPlan, ...(r?.weeklyPlan || {})};
     rec.todayFlow = {...blankRecord(rec).todayFlow, ...(r?.todayFlow || {})};
-    rec.todayFlow.tasks = arr(rec.todayFlow.tasks).map(t=>({title:String(t?.title || t || '').trim(), minutes:Math.max(1,Number(t?.minutes || 5)), done:!!t?.done})).filter(t=>t.title);
+    // 這裡每次都會被呼叫（每次 render 都會經過），以前只留 title/minutes/done 三個欄位，
+    // 會把剛剛用「點擊選取」設定的 magicAttr（還有 status 等其他欄位）直接洗掉，
+    // 導致魔法屬性存了又馬上被下一次重繪蓋回去。改成保留原本物件的其他欄位。
+    rec.todayFlow.tasks = arr(rec.todayFlow.tasks).map(t=>{
+      if(t && typeof t === 'object'){
+        return {...t, title:String(t.title || '').trim(), minutes:Math.max(1,Number(t.minutes || 5)), done:!!t.done};
+      }
+      return {title:String(t || '').trim(), minutes:5, done:false};
+    }).filter(t=>t.title);
     if(!rec.todayFlow.tasks.length) rec.todayFlow.tasks = blankRecord(rec).todayFlow.tasks;
     rec.fixedCurriculum = {...blankRecord(rec).fixedCurriculum, ...(r?.fixedCurriculum || {})};
     rec.growthHighlights = {...blankRecord(rec).growthHighlights, ...(r?.growthHighlights || {})};
@@ -29298,11 +29306,15 @@ ST160_StateGuard.install();
   function collectTodayFromDom(){
     const rec = recordFor();
     rec.todayFlow.startTime = document.getElementById('lessonTodayStartTime')?.value || '10:30';
-    rec.todayFlow.tasks = [...document.querySelectorAll('#lessonTodayTasks .lesson-flow-row')].map(row=>({
-      title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
-      minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
-      done:!!row.querySelector('.lesson-today-done')?.checked
-    })).filter(t=>t.title);
+    {
+      const container = document.getElementById('lessonTodayTasks');
+      const rows = container ? [...container.querySelectorAll('.lesson-flow-row')] : [];
+      rec.todayFlow.tasks = rows.map(row=>({
+        title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
+        minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
+        done:!!row.querySelector('.lesson-today-done')?.checked
+      })).filter(t=>t.title);
+    }
     rec.todayFlow.reminder = document.getElementById('lessonTodayReminder')?.value || '';
     rec.todayFlow.homework = document.getElementById('lessonTodayHomework')?.value || '';
     rec.todayFlow.note = document.getElementById('lessonTodayNote')?.value || '';
@@ -29363,7 +29375,8 @@ ST160_StateGuard.install();
   };
   window.lessonUpdateTodayPreview = function(){
     const start=document.getElementById('lessonTodayStartTime')?.value || '10:30'; let cur=timeToMin(start), total=0;
-    [...document.querySelectorAll('#lessonTodayTasks .lesson-flow-row')].forEach(row=>{ const min=Math.max(1,Number(row.querySelector('.lesson-today-min')?.value||1)); total+=min; const p=row.querySelector('.lesson-time-preview'); if(p) p.textContent=`${minToTime(cur)} - ${minToTime(cur+min)}`; cur+=min; });
+    const previewContainer = document.getElementById('lessonTodayTasks');
+    [...(previewContainer ? previewContainer.querySelectorAll('.lesson-flow-row') : [])].forEach(row=>{ const min=Math.max(1,Number(row.querySelector('.lesson-today-min')?.value||1)); total+=min; const p=row.querySelector('.lesson-time-preview'); if(p) p.textContent=`${minToTime(cur)} - ${minToTime(cur+min)}`; cur+=min; });
     const t=document.getElementById('lessonTodayTotal'); if(t) t.textContent=`總計 ${total} 分鐘`;
   };
   window.lessonRenderTodayFlow = function(rec=recordFor()){
@@ -29950,7 +29963,11 @@ ST160_StateGuard.install();
   }
   function lines(raw){ return String(raw||'').split(/\n/).map(x=>x.trim()).filter(Boolean); }
   function collectTasks(){
-    const rows=[...document.querySelectorAll('#lessonTodayTasks .lesson-flow-row')];
+    // 用 querySelectorAll('#id ...') 如果畫面上不小心同時存在兩個同 id 的容器
+    // （不合法的 HTML，但瀏覽器不會擋），會把兩份都讀進來、越滾越大。
+    // 改成先用 getElementById 鎖定「第一個」容器，再只抓它裡面的任務列。
+    const container = document.getElementById('lessonTodayTasks');
+    const rows = container ? [...container.querySelectorAll('.lesson-flow-row')] : [];
     if(rows.length){
       return rows.map(row=>({
         title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
