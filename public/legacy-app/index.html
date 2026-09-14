@@ -29309,7 +29309,11 @@ ST160_StateGuard.install();
     {
       const container = document.getElementById('lessonTodayTasks');
       const rows = container ? [...container.querySelectorAll('.lesson-flow-row')] : [];
-      rec.todayFlow.tasks = rows.map(row=>({
+      const oldTasks = arr(rec.todayFlow.tasks);
+      // 跟 old（同一個位置的舊任務物件）合併，保留 magicAttr／status 等欄位，
+      // 不要每次讀 DOM 都只留 title/minutes/done 三個欄位、把其他資料洗掉。
+      rec.todayFlow.tasks = rows.map((row,i)=>({
+        ...(oldTasks[i] || {}),
         title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
         minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
         done:!!row.querySelector('.lesson-today-done')?.checked
@@ -29362,7 +29366,7 @@ ST160_StateGuard.install();
     const old = arr(rec.todayFlow.tasks);
     const titles = lines(rec.weeklyPlan.taskText);
     const fallback = titles.length ? Math.max(1, Math.floor(40/titles.length)) : 10;
-    rec.todayFlow.tasks = titles.map((title,i)=>{ const oldMatch=old.find(t=>t.title===title)||old[i]||{}; return {title, minutes:Math.max(1,Number(oldMatch.minutes||fallback)), done:!!oldMatch.done}; });
+    rec.todayFlow.tasks = titles.map((title,i)=>{ const oldMatch=old.find(t=>t.title===title)||old[i]||{}; return {...oldMatch, title, minutes:Math.max(1,Number(oldMatch.minutes||fallback)), done:!!oldMatch.done}; });
     rec.updatedAt = new Date().toISOString();
     persist('V15.37 同步主線到今天流程');
     alert('已同步到今天課堂流程。'); try{ render(); }catch(e){}
@@ -29969,7 +29973,10 @@ ST160_StateGuard.install();
     const container = document.getElementById('lessonTodayTasks');
     const rows = container ? [...container.querySelectorAll('.lesson-flow-row')] : [];
     if(rows.length){
-      return rows.map(row=>({
+      let oldTasks = [];
+      try{ oldTasks = arr(currentRecord(false)?.todayFlow?.tasks); }catch(e){}
+      return rows.map((row,i)=>({
+        ...(oldTasks[i] || {}),
         title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
         minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
         done:!!row.querySelector('.lesson-today-done')?.checked
@@ -29980,13 +29987,21 @@ ST160_StateGuard.install();
   function collectWeeklyTasksText(){
     const txt=document.getElementById('lessonWeeklyTaskText')?.value;
     if(txt != null) return txt;
-    const rows=[...document.querySelectorAll('#lessonWeeklyTasks .lesson-core-row')];
+    const weeklyTasksContainer=document.getElementById('lessonWeeklyTasks');
+    const rows=weeklyTasksContainer ? [...weeklyTasksContainer.querySelectorAll('.lesson-core-row')] : [];
     if(rows.length) return rows.map(row=>row.querySelector('.lesson-weekly-task-title')?.value?.trim()||'').filter(Boolean).join('\n');
     return null;
   }
   function collectWeeklyTasksArray(){
+    // window.lessonCollectWeeklyTasks() 讀的是舊版（#lessonWeeklyTasks）容器，
+    // 現在畫面上早就沒有這個容器了，永遠回傳空陣列——但空陣列是 truthy，
+    // 呼叫端只判斷「有沒有值」不看長度，會把 weeklyPlan.tasks 每次同步都洗成空的。
+    // 改成只有真的抓到東西才採用，抓不到就照原本設計 fall back 到文字欄位。
     if(typeof window.lessonCollectWeeklyTasks === 'function'){
-      try{ return arr(window.lessonCollectWeeklyTasks()).filter(t=>t?.title); }catch(e){}
+      try{
+        const domTasks = arr(window.lessonCollectWeeklyTasks()).filter(t=>t?.title);
+        if(domTasks.length) return domTasks;
+      }catch(e){}
     }
     const txt=collectWeeklyTasksText();
     return txt==null ? null : lines(txt).map(title=>({title,minutes:10}));
