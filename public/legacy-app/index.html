@@ -30629,46 +30629,55 @@ ST160_StateGuard.install();
     }
   }
 
-  try{
-    firebaseDb.ref('battleSystem/main').on('value', onCloudValue);
-  }catch(e){
-    console.warn('V15.40 realtime listener attach failed', e);
-  }
+  // 2026-09-21：關閉。使用者回報好幾次不同學校/不同天的編輯內容，
+  // 過一陣子再打開會不見（含明確刪除的資料自己「長回來」）。研判是這裡的
+  // 自動背景上傳／自動套用雲端，在多台裝置各自本機資料沒完全同步的情況下，
+  // 靜悄悄地用某一台比較舊的本機資料把雲端（或反過來把本機）蓋過去，
+  // 完全沒有提示。在想出更安全的做法（例如每筆紀錄分開存，而不是整包
+  // state 互蓋）之前，先整個關掉，退回原本「手動按上傳/讀取」的方式。
+  const ENABLED = false;
+  if(ENABLED){
+    try{
+      firebaseDb.ref('battleSystem/main').on('value', onCloudValue);
+    }catch(e){
+      console.warn('V15.40 realtime listener attach failed', e);
+    }
 
-  const oldUploadAll = window.firebaseUploadAll;
-  if(typeof oldUploadAll === 'function' && !oldUploadAll.__v1540Wrapped){
-    window.firebaseUploadAll = async function(...args){
-      const r = await oldUploadAll.apply(this, args);
-      selfUploadUntil = Date.now() + 4000;
-      return r;
-    };
-    window.firebaseUploadAll.__v1540Wrapped = true;
-  }
+    const oldUploadAll = window.firebaseUploadAll;
+    if(typeof oldUploadAll === 'function' && !oldUploadAll.__v1540Wrapped){
+      window.firebaseUploadAll = async function(...args){
+        const r = await oldUploadAll.apply(this, args);
+        selfUploadUntil = Date.now() + 4000;
+        return r;
+      };
+      window.firebaseUploadAll.__v1540Wrapped = true;
+    }
 
-  let autoUploadTimer = null;
-  const oldMarkDirty = window.markDirty;
-  if(typeof oldMarkDirty === 'function' && !oldMarkDirty.__v1540Wrapped){
-    window.markDirty = function(...args){
-      const r = oldMarkDirty.apply(this, args);
-      clearTimeout(autoUploadTimer);
-      autoUploadTimer = setTimeout(()=>{
-        if(syncStatus.dirty && !syncStatus.syncing && !isEditingNow()){
-          metrics.autoUploads++;
-          guardedFirebaseUpload(true);
-        }
-      }, 8000);
-      return r;
-    };
-    window.markDirty.__v1540Wrapped = true;
+    let autoUploadTimer = null;
+    const oldMarkDirty = window.markDirty;
+    if(typeof oldMarkDirty === 'function' && !oldMarkDirty.__v1540Wrapped){
+      window.markDirty = function(...args){
+        const r = oldMarkDirty.apply(this, args);
+        clearTimeout(autoUploadTimer);
+        autoUploadTimer = setTimeout(()=>{
+          if(syncStatus.dirty && !syncStatus.syncing && !isEditingNow()){
+            metrics.autoUploads++;
+            guardedFirebaseUpload(true);
+          }
+        }, 8000);
+        return r;
+      };
+      window.markDirty.__v1540Wrapped = true;
+    }
   }
 
   window.CloudFirstSyncProbe = function(){
-    const r = { version:VERSION, metrics, lastAppliedCloudUpdatedAt, localHasUnsyncedChanges:localHasUnsyncedChanges(), isEditingNow:isEditingNow(), syncStatus:{...syncStatus} };
+    const r = { version:VERSION, enabled:ENABLED, metrics, lastAppliedCloudUpdatedAt, localHasUnsyncedChanges:localHasUnsyncedChanges(), isEditingNow:isEditingNow(), syncStatus:{...syncStatus} };
     console.log('V15.40 CloudFirstSyncProbe', r);
     return r;
   };
 
-  console.info(`${VERSION} loaded. 可用：CloudFirstSyncProbe()`);
+  console.info(`${VERSION} loaded but DISABLED（背景自動同步已關閉，改回手動上傳/讀取）。可用：CloudFirstSyncProbe()`);
 })();
 </script>
 
