@@ -861,6 +861,14 @@ input[type="date"]{
 .adventure-board.four{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:14px}
 @media(max-width:900px){.adventure-board.four{grid-template-columns:1fr}}
 .curriculum-readonly-note{font-size:12px;color:var(--muted);margin-top:10px}
+.cloud-history-row{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:10px 12px;
+  margin-top:10px;
+  background:var(--card);
+}
+.cloud-history-row .note{margin:4px 0 8px}
 
 .main-progress-bar{height:10px;border-radius:999px;background:#eee2c3;overflow:hidden;margin:8px 0 12px}.main-progress-bar span{display:block;height:100%;background:#7fc8a9;border-radius:999px}
 
@@ -6446,11 +6454,15 @@ async function firebaseUploadAll(silent=false, force=false) {
     state.backupMeta.lastLocalChangeAt = state.backupMeta.lastFirebaseUploadAt;
     state.backupMeta.lastLocalChangeMs = state.backupMeta.lastFirebaseUploadMs;
 
-    await firebaseDb.ref("battleSystem/main").set({
+    const payload = {
       updatedAt: Date.now(),
       updatedAtText: localIsoLikeString(),
+      deviceName: (typeof getDeviceName === "function" ? getDeviceName() : ""),
       state: JSON.parse(JSON.stringify(state))
-    });
+    };
+
+    await firebaseDb.ref("battleSystem/main").set(payload);
+    await writeCloudHistory(payload);
 
     syncStatus.syncing = false;
     syncStatus.cloudIsNewer = false;
@@ -6464,6 +6476,115 @@ async function firebaseUploadAll(silent=false, force=false) {
     syncStatus.lastError = err && err.message ? err.message : String(err);
     renderSyncStatus();
     if(!silent) alert("Firebase 上傳失敗：" + syncStatus.lastError);
+  }
+}
+
+/* =========================================================
+   2026-09-23 SYNC MODULE: 雲端上傳歷史（救援用）
+   ---------------------------------------------------------
+   battleSystem/main 永遠只有「最後一次上傳」那一份，被蓋掉就沒了。
+   所以每次手動上傳時，另外存一份時間戳記快照到
+   battleSystem/history/<ts>，並在 battleSystem/historyIndex/<ts>
+   留一筆小摘要（只有數量，很小，列清單時不用下載整包資料）。
+   萬一雲端又被清空或蓋掉，可以直接從歷史挑一版救回來，
+   不必跑回當初那台裝置。
+   ========================================================= */
+const CLOUD_HISTORY_KEEP = 12;
+
+function cloudStateSummary(st){
+  const n = k => Array.isArray(st?.[k]) ? st[k].length : 0;
+  return {
+    schools:n("schools"),
+    classes:n("classes"),
+    students:n("students"),
+    attendance:n("attendance"),
+    courseNotes:n("courseNotes"),
+    pointLogs:n("pointLogs"),
+    growthLogs:n("growthLogs"),
+    modeTemplates:n("modeTemplates"),
+    curriculumTemplates:n("curriculumTemplates")
+  };
+}
+
+async function writeCloudHistory(payload){
+  try{
+    if(typeof firebaseDb === "undefined") return;
+    const key = String(payload.updatedAt);
+
+    await firebaseDb.ref("battleSystem/history/" + key).set(payload);
+    await firebaseDb.ref("battleSystem/historyIndex/" + key).set({
+      updatedAt: payload.updatedAt,
+      updatedAtText: payload.updatedAtText,
+      deviceName: payload.deviceName || "",
+      summary: cloudStateSummary(payload.state)
+    });
+
+    /* 只留最近 CLOUD_HISTORY_KEEP 份，舊的刪掉避免無限長大。
+       用 index（很小）決定要刪哪些，不必下載整包歷史。 */
+    const idxSnap = await firebaseDb.ref("battleSystem/historyIndex").once("value");
+    const keys = Object.keys(idxSnap.val() || {}).sort((a,b)=>Number(a)-Number(b));
+    const stale = keys.slice(0, Math.max(0, keys.length - CLOUD_HISTORY_KEEP));
+    for(const k of stale){
+      await firebaseDb.ref("battleSystem/history/" + k).remove();
+      await firebaseDb.ref("battleSystem/historyIndex/" + k).remove();
+    }
+  }catch(err){
+    /* 歷史備份失敗不該讓主要上傳看起來像失敗 —— 主資料已經寫進去了 */
+    console.warn("雲端上傳歷史寫入失敗（主資料已上傳成功）", err);
+  }
+}
+
+async function renderCloudHistoryList(){
+  const box = document.getElementById("cloudHistoryList");
+  if(!box) return;
+  box.innerHTML = `<div class="note">讀取中…</div>`;
+  try{
+    if(typeof firebaseDb === "undefined"){
+      box.innerHTML = `<div class="note">Firebase 尚未載入。</div>`;
+      return;
+    }
+    const snap = await firebaseDb.ref("battleSystem/historyIndex").once("value");
+    const rows = Object.values(snap.val() || {}).sort((a,b)=>Number(b.updatedAt)-Number(a.updatedAt));
+    if(!rows.length){
+      box.innerHTML = `<div class="note">目前還沒有上傳歷史。下次按「上傳雲端」後就會開始累積。</div>`;
+      return;
+    }
+    box.innerHTML = rows.map(r=>{
+      const s = r.summary || {};
+      return `
+        <div class="cloud-history-row">
+          <div><b>${escapeHtml(safeFormatDateTime(r.updatedAtText || ""))}</b>
+            <span style="opacity:.7">${escapeHtml(r.deviceName || "")}</span></div>
+          <div class="note">學校 ${s.schools||0}｜班級 ${s.classes||0}｜學生 ${s.students||0}｜課堂流程模板 ${s.modeTemplates||0}｜課綱 ${s.curriculumTemplates||0}｜課程紀錄 ${s.courseNotes||0}｜點名 ${s.attendance||0}</div>
+          <button class="btn gold" onclick="restoreCloudHistory('${escapeHtml(String(r.updatedAt))}')">還原這一版</button>
+        </div>`;
+    }).join("");
+  }catch(err){
+    box.innerHTML = `<div class="note">讀取歷史失敗：${escapeHtml(err?.message || String(err))}</div>`;
+  }
+}
+
+async function restoreCloudHistory(key){
+  if(!confirm("還原會用這一版的雲端備份覆蓋『目前本機資料』。\n（還原後記得檢查內容，確認沒問題再按上傳雲端）\n確定要還原嗎？")) return;
+  try{
+    const snap = await firebaseDb.ref("battleSystem/history/" + key).once("value");
+    if(!snap.exists()) return alert("找不到這一版備份。");
+    const data = snap.val();
+    if(!data || !data.state) return alert("這一版備份格式錯誤。");
+
+    state = migrateState(data.state);
+    ensureBackupMeta();
+    state.backupMeta.lastFirebaseDownloadAt = localIsoLikeString();
+    state.backupMeta.lastFirebaseDownloadMs = Date.now();
+    /* 還原的是舊版本，標記成有未上傳的修改，提醒使用者確認後自己按上傳 */
+    state.backupMeta.lastLocalChangeMs = Date.now();
+    saveState();
+    syncStatus.dirty = true;
+    render();
+    renderSyncStatus();
+    alert("已還原這一版備份到本機。\n請先確認資料正確，再按「⬆️ 上傳雲端」寫回雲端。");
+  }catch(err){
+    alert("還原失敗：" + (err?.message || String(err)));
   }
 }
 
@@ -6890,7 +7011,7 @@ function showDeviceLockWarning(lock){
       最後活動：${escapeHtml(safeFormatDateTime(lock?.updatedAtText || lock?.updatedAt || ""))}
     </div>
     <div class="note" style="margin-top:8px">
-      為了避免舊裝置覆蓋新資料，這台裝置的自動上傳已暫停。若你確定要用目前裝置編輯，可以接管編輯權。
+      為了避免舊裝置覆蓋新資料，這台裝置暫時不能上傳雲端。若你確定要用目前裝置編輯，可以接管編輯權。
     </div>
     <div class="actions">
       <button class="btn gold" onclick="firebaseDownloadAll()">⬇️ 先讀取雲端</button>
@@ -7042,15 +7163,35 @@ window.addEventListener("beforeunload", function(e){
   }
 });
 
-document.addEventListener("visibilitychange", function(){
-  if(document.visibilityState === "hidden" && syncStatus.dirty){
-    guardedFirebaseUpload(true);
-  }
-});
+/* =========================================================
+   2026-09-23：關閉「背景自動上傳」。
+   ---------------------------------------------------------
+   使用者回報：在學校填完課堂流程、任務並按「上傳雲端」（有看到
+   「上傳成功」提示，代表雲端當下確實寫入了），回家讀取雲端卻是空的。
 
-setInterval(function(){
-  if(syncStatus.dirty && !syncStatus.syncing) guardedFirebaseUpload(true);
-},600000);
+   原因就是下面這兩個背景自動上傳：只要某台裝置（例如家裡一直開著、
+   本機還是舊資料的分頁）被判定為 dirty，切換分頁或每 10 分鐘一到，
+   就會靜悄悄地把它那份舊資料整包蓋上雲端，使用者完全不會察覺。
+   V15.40 的即時同步已於 2026-09-21 關閉，但這一層是更早期就存在的，
+   當時沒一起關掉，所以問題繼續發生。
+
+   新行為：只有使用者自己按「⬆️ 上傳雲端」才會寫雲端，就像 Word
+   之類的文書軟體一樣，不會有任何裝置在背景自動覆蓋別人的資料。
+   保留 beforeunload 提醒，離開前提示還沒上傳（現在更重要了）。
+   ========================================================= */
+const AUTO_UPLOAD_ENABLED = false;
+
+if(AUTO_UPLOAD_ENABLED){
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState === "hidden" && syncStatus.dirty){
+      guardedFirebaseUpload(true);
+    }
+  });
+
+  setInterval(function(){
+    if(syncStatus.dirty && !syncStatus.syncing) guardedFirebaseUpload(true);
+  },600000);
+}
 
 
 
@@ -13013,6 +13154,16 @@ function renderBackupSettings(){
       </div>
       <button class="btn primary" onclick="firebaseUploadAll()">🔥 上傳 Firebase</button>
       <button class="btn gold" onclick="firebaseDownloadAll()">🔥 讀取 Firebase</button>
+    </section>
+
+    <section class="card">
+      <h3>🕘 雲端上傳歷史（救援用）</h3>
+      <div class="note">
+        每次按「上傳雲端」都會自動多存一份快照（保留最近 ${CLOUD_HISTORY_KEEP} 份）。
+        萬一雲端資料被蓋掉或不見了，可以從這裡挑一版救回來。
+      </div>
+      <button class="btn primary" onclick="renderCloudHistoryList()">讀取歷史清單</button>
+      <div id="cloudHistoryList"></div>
     </section>
 
     <section class="card">
