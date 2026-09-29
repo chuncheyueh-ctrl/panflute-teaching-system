@@ -6596,6 +6596,22 @@ async function firebaseDownloadAll() {
     if (typeof firebase === "undefined" || typeof firebaseDb === "undefined") {
       return alert("Firebase 尚未載入，請重新整理頁面。");
     }
+
+    /* 2026-09-29：讀取雲端會直接整包蓋掉本機 state，完全沒有檢查本機
+       是否還有「尚未上傳」的修改。實際發生過：使用者在學校/家裡打完
+       課堂流程文字、按了儲存，但上傳前系統偵測到雲端較新、彈出衝突
+       視窗，使用者選了「⬇️ 讀取雲端」想先同步——結果就是把剛打好、
+       還沒上傳的本機修改直接蓋掉，之後再按上傳，存回雲端的自然還是
+       蓋掉之前、沒有新文字的舊版本。
+       這裡補上：(1) 本機有 dirty 修改時，讀取雲端前先跟使用者確認；
+       (2) 不管有沒有 dirty，讀取前一律先做一份本機安全備份，
+       就算使用者還是選擇讀取雲端，也留一份可以救回來。 */
+    if (syncStatus.dirty) {
+      const ok = confirm("這台裝置還有尚未上傳雲端的修改。\n讀取雲端會直接蓋掉這些本機修改（會先自動做一份本機安全備份）。\n\n確定要放棄本機修改、改用雲端版本嗎？\n不確定的話請按「取消」，先按「⬆️ 上傳雲端」把本機修改存上去。");
+      if (!ok) return;
+    }
+    try{ createLocalSafetyBackup("before-download-overwrite"); }catch(e){}
+
     syncStatus.syncing = true;
     syncStatus.lastError = "";
     renderSyncStatus();
