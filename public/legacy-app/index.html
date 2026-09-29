@@ -6444,6 +6444,8 @@ async function firebaseUploadAll(silent=false, force=false) {
       return guardedFirebaseUpload(silent);
     }
 
+    try{ window.lessonFlushPendingBeforeSync?.(); }catch(e){}
+
     syncStatus.syncing = true;
     syncStatus.lastError = "";
     renderSyncStatus();
@@ -9899,7 +9901,14 @@ function renderClassroom(){
   if(activeEl && document.getElementById('app')?.contains(activeEl) && /^(TEXTAREA|INPUT)$/.test(activeEl.tagName||'')){
     if(!window.__renderClassroomPendingRerender){
       window.__renderClassroomPendingRerender = true;
-      activeEl.addEventListener('blur', function(){ window.__renderClassroomPendingRerender=false; try{ renderClassroom(); }catch(e){} }, {once:true});
+      /* 2026-09-29：這裡重繪整個 #app（含右上「今天課堂流程」等四張卡片）
+         是直接整包用 state 重畫，不是只補畫一小塊。如果使用者正在某個
+         欄位打字、還沒按各卡片自己的「儲存」，這裡在 blur 當下重畫就會
+         直接把整個畫面換成 state 裡舊的（沒有剛打的字）版本，等於把
+         使用者剛打的字洗掉——即使之後使用者按下儲存，存的也已經是被
+         洗掉的空字串。先呼叫 lessonFlushPendingBeforeSync() 把四張課程
+         紀錄卡片目前畫面上的內容收進 state，再重繪就不會遺失。 */
+      activeEl.addEventListener('blur', function(){ window.__renderClassroomPendingRerender=false; try{ window.lessonFlushPendingBeforeSync?.(); }catch(e){} try{ renderClassroom(); }catch(e){} }, {once:true});
     }
     return;
   }
@@ -29446,33 +29455,48 @@ ST160_StateGuard.install();
   function taskTextFromWeekly(p){ return p?.taskText || lines(p?.tasks).join('\n'); }
   function collectWeeklyFromDom(){
     const rec = recordFor();
-    rec.weeklyPlan.title = document.getElementById('lessonWeeklyTitle')?.value || '';
-    rec.weeklyPlan.goal = document.getElementById('lessonWeeklyGoal')?.value || '';
-    rec.weeklyPlan.taskText = document.getElementById('lessonWeeklyTaskText')?.value || '';
-    rec.weeklyPlan.sideQuest = document.getElementById('lessonWeeklySideQuest')?.value || '';
-    rec.weeklyPlan.tasks = lines(rec.weeklyPlan.taskText).map(title=>({title}));
+    /* 2026-09-29：欄位如果暫時不存在畫面上（例如整個 #app 剛好在
+       重繪、新的欄位還沒掛回去），就保留 rec 原本的值，不要用預設
+       的空字串覆蓋掉——否則會在「畫面正在重繪」的瞬間把資料洗空。 */
+    const titleEl = document.getElementById('lessonWeeklyTitle');
+    const goalEl = document.getElementById('lessonWeeklyGoal');
+    const taskTextEl = document.getElementById('lessonWeeklyTaskText');
+    const sideQuestEl = document.getElementById('lessonWeeklySideQuest');
+    if(titleEl) rec.weeklyPlan.title = titleEl.value || '';
+    if(goalEl) rec.weeklyPlan.goal = goalEl.value || '';
+    if(taskTextEl) rec.weeklyPlan.taskText = taskTextEl.value || '';
+    if(sideQuestEl) rec.weeklyPlan.sideQuest = sideQuestEl.value || '';
+    if(taskTextEl) rec.weeklyPlan.tasks = lines(rec.weeklyPlan.taskText).map(title=>({title}));
     rec.updatedAt = new Date().toISOString();
     return rec;
   }
   function collectTodayFromDom(){
     const rec = recordFor();
-    rec.todayFlow.startTime = document.getElementById('lessonTodayStartTime')?.value || '10:30';
+    /* 2026-09-29：同上（見 collectWeeklyFromDom 的說明）——欄位這時如果
+       不在畫面上，就維持 rec 原本的值，不要用空字串／預設值覆蓋掉。 */
+    const startTimeEl = document.getElementById('lessonTodayStartTime');
+    if(startTimeEl) rec.todayFlow.startTime = startTimeEl.value || '10:30';
     {
       const container = document.getElementById('lessonTodayTasks');
-      const rows = container ? [...container.querySelectorAll('.lesson-flow-row')] : [];
-      const oldTasks = arr(rec.todayFlow.tasks);
-      // 跟 old（同一個位置的舊任務物件）合併，保留 magicAttr／status 等欄位，
-      // 不要每次讀 DOM 都只留 title/minutes/done 三個欄位、把其他資料洗掉。
-      rec.todayFlow.tasks = rows.map((row,i)=>({
-        ...(oldTasks[i] || {}),
-        title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
-        minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
-        done:!!row.querySelector('.lesson-today-done')?.checked
-      })).filter(t=>t.title);
+      if(container){
+        const rows = [...container.querySelectorAll('.lesson-flow-row')];
+        const oldTasks = arr(rec.todayFlow.tasks);
+        // 跟 old（同一個位置的舊任務物件）合併，保留 magicAttr／status 等欄位，
+        // 不要每次讀 DOM 都只留 title/minutes/done 三個欄位、把其他資料洗掉。
+        rec.todayFlow.tasks = rows.map((row,i)=>({
+          ...(oldTasks[i] || {}),
+          title:row.querySelector('.lesson-today-title')?.value?.trim() || '',
+          minutes:Math.max(1,Number(row.querySelector('.lesson-today-min')?.value || 1)),
+          done:!!row.querySelector('.lesson-today-done')?.checked
+        })).filter(t=>t.title);
+      }
     }
-    rec.todayFlow.reminder = document.getElementById('lessonTodayReminder')?.value || '';
-    rec.todayFlow.homework = document.getElementById('lessonTodayHomework')?.value || '';
-    rec.todayFlow.note = document.getElementById('lessonTodayNote')?.value || '';
+    const reminderEl = document.getElementById('lessonTodayReminder');
+    const homeworkEl = document.getElementById('lessonTodayHomework');
+    const noteEl = document.getElementById('lessonTodayNote');
+    if(reminderEl) rec.todayFlow.reminder = reminderEl.value || '';
+    if(homeworkEl) rec.todayFlow.homework = homeworkEl.value || '';
+    if(noteEl) rec.todayFlow.note = noteEl.value || '';
     rec.updatedAt = new Date().toISOString();
     try{ localStorage.setItem('battle_start_class_time', rec.todayFlow.startTime); }catch(e){}
     return rec;
@@ -29500,8 +29524,31 @@ ST160_StateGuard.install();
   window.lessonTimeToMin = timeToMin;
   window.lessonMinToTime = minToTime;
 
+  /* =========================================================
+     2026-09-29：修正「明明按了儲存，雲端還是空的」。
+     ---------------------------------------------------------
+     這四張卡片（本週主線／今天課堂流程／固定課綱／成長亮點）在使用者
+     打字打到一半時，若畫面上任何地方觸發了一次全域 render()，就會走
+     下面這段「延後到 blur 才重繪」的保護。但重繪時用的是觸發當下就
+     已經存在（沒有使用者剛打的字）的舊 rec 物件；使用者點下「儲存」
+     按鈕時，textarea 會先 blur 才會觸發 click，於是重繪先把欄位洗回
+     舊內容，儲存按鈕接著讀到的就是被洗掉的空字串——畫面上仍會跳出
+     「✓ 已儲存」，但存進去的其實是空的，上傳雲端後另一台裝置當然看
+     不到任何文字。
+     實測重現：在「今日課堂補充」打字、手動呼叫一次 render()、模擬
+     blur，欄位值確實被洗成空字串。
+     修法：blur 當下先把「現在畫面上」的值收進 rec 再重繪，而不是用
+     觸發當下的舊 rec，這樣重繪出來的內容永遠等於使用者剛打的字。
+     ========================================================= */
   window.lessonRenderWeeklyPlan = function(rec=recordFor()){
     const root = document.getElementById('lessonWeeklyPlanCore'); if(!root || !rec) return;
+    if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
+      if(!root.__v1537PendingRerender){
+        root.__v1537PendingRerender = true;
+        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ window.lessonRenderWeeklyPlan(collectWeeklyFromDom()); }catch(e){} }, {once:true});
+      }
+      return;
+    }
     const p = rec.weeklyPlan || {};
     root.innerHTML = `${reviewHtml(previousRecord())}
       <div class="lesson-text-only-note">本區現在由 <b>state.lessonRecords</b> 單一資料源渲染。右上儲存後，下次上課會出現在「上週課堂回顧」。</div>
@@ -29539,7 +29586,7 @@ ST160_StateGuard.install();
     if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
       if(!root.__v1537PendingRerender){
         root.__v1537PendingRerender = true;
-        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ window.lessonRenderTodayFlow(rec); }catch(e){} }, {once:true});
+        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ window.lessonRenderTodayFlow(collectTodayFromDom()); }catch(e){} }, {once:true});
       }
       return;
     }
@@ -29563,26 +29610,55 @@ ST160_StateGuard.install();
     if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
       if(!root.__v1537PendingRerender){
         root.__v1537PendingRerender = true;
-        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ window.lessonRenderFixedCurriculum(rec); }catch(e){} }, {once:true});
+        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ const liveRec=recordFor(); liveRec.fixedCurriculum.text=document.getElementById('lessonFixedText')?.value ?? liveRec.fixedCurriculum.text; window.lessonRenderFixedCurriculum(liveRec); }catch(e){} }, {once:true});
       }
       return;
     }
     root.innerHTML = `<div class="lesson-core-field"><label>固定課綱 / 長期進度</label><textarea id="lessonFixedText" placeholder="例如：音階、節奏、視譜、曲目段落。">${esc(rec.fixedCurriculum?.text||'')}</textarea></div><button id="lessonSaveFixedCurriculumBtn" class="lesson-core-btn primary" onclick="lessonSaveFixedCurriculum()">儲存固定課綱</button>`;
   };
-  window.lessonSaveFixedCurriculum = function(){ const rec=recordFor(); rec.fixedCurriculum.text=document.getElementById('lessonFixedText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 固定課綱'); flashSaved('✓ 固定課綱已儲存'); };
+  window.lessonSaveFixedCurriculum = function(){ const rec=recordFor(); const el=document.getElementById('lessonFixedText'); if(el) rec.fixedCurriculum.text=el.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 固定課綱'); flashSaved('✓ 固定課綱已儲存'); };
   window.lessonRenderGrowthHighlights = function(rec=recordFor()){
     const root=document.getElementById('lessonGrowthHighlightsCore'); if(!root || !rec) return;
     if(root.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement.tagName||'')){
       if(!root.__v1537PendingRerender){
         root.__v1537PendingRerender = true;
-        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ window.lessonRenderGrowthHighlights(rec); }catch(e){} }, {once:true});
+        document.activeElement.addEventListener('blur', function(){ root.__v1537PendingRerender=false; try{ const liveRec=recordFor(); liveRec.growthHighlights.text=document.getElementById('lessonGrowthText')?.value ?? liveRec.growthHighlights.text; window.lessonRenderGrowthHighlights(liveRec); }catch(e){} }, {once:true});
       }
       return;
     }
     root.innerHTML = `<div class="lesson-core-field"><label>成長亮點</label><textarea id="lessonGrowthText" placeholder="例如：今天節奏穩定、主動幫助同學。">${esc(rec.growthHighlights?.text||'')}</textarea></div><button id="lessonSaveGrowthHighlightsBtn" class="lesson-core-btn primary" onclick="lessonSaveGrowthHighlights()">儲存成長亮點</button>`;
   };
-  window.lessonSaveGrowthHighlights = function(){ const rec=recordFor(); rec.growthHighlights.text=document.getElementById('lessonGrowthText')?.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 成長亮點'); flashSaved('✓ 成長亮點已儲存'); };
+  window.lessonSaveGrowthHighlights = function(){ const rec=recordFor(); const el=document.getElementById('lessonGrowthText'); if(el) rec.growthHighlights.text=el.value||''; rec.updatedAt=new Date().toISOString(); persist('V15.37 成長亮點'); flashSaved('✓ 成長亮點已儲存'); };
   window.lessonMountAll = function(){ const rec=recordFor(); window.lessonRenderWeeklyPlan(rec); window.lessonRenderTodayFlow(rec); window.lessonRenderFixedCurriculum(rec); window.lessonRenderGrowthHighlights(rec); };
+
+  /* =========================================================
+     2026-09-29：上傳雲端前自動補存課程紀錄四格卡片。
+     ---------------------------------------------------------
+     使用者回報：在學校把「今天課堂流程」文字打完後直接按「上傳雲端」
+     （沒有先點各卡片自己的「儲存」按鈕），回家在另一台裝置讀取雲端
+     卻完全沒有文字。原因是這四格卡片的文字只有按下各自的儲存按鈕
+     才會寫進 state／localStorage，firebaseUploadAll() 上傳的是
+     JSON.stringify(state)，不會去讀畫面上還沒儲存的欄位。
+     只在對應卡片目前真的掛在畫面上時才收集，避免切到別的分頁、
+     容器是空的時候把舊資料洗成空字串。
+     ========================================================= */
+  window.lessonFlushPendingBeforeSync = function(){
+    try{
+      if(document.getElementById('lessonWeeklyTaskText') || document.getElementById('lessonWeeklyTitle')) collectWeeklyFromDom();
+    }catch(e){}
+    try{
+      if(document.getElementById('lessonTodayReminder') || document.getElementById('lessonTodayStartTime')) collectTodayFromDom();
+    }catch(e){}
+    try{
+      const el = document.getElementById('lessonFixedText');
+      if(el){ const rec=recordFor(); rec.fixedCurriculum.text = el.value || ''; rec.updatedAt = new Date().toISOString(); }
+    }catch(e){}
+    try{
+      const el = document.getElementById('lessonGrowthText');
+      if(el){ const rec=recordFor(); rec.growthHighlights.text = el.value || ''; rec.updatedAt = new Date().toISOString(); }
+    }catch(e){}
+    try{ persist('上傳雲端前自動儲存'); }catch(e){}
+  };
 
   // Start Class reads only today's lessonRecord.
   window.sc939TaskItems = function(){ return arr(recordFor()?.todayFlow?.tasks).map(t=>({title:t.title, minutes:Math.max(1,Number(t.minutes||1)), done:!!t.done})); };
