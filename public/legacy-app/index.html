@@ -6645,7 +6645,35 @@ async function firebaseDownloadAll() {
     syncStatus.cloudUpdatedAt = Number(data.updatedAt || 0);
 
     saveState();
+
+    /* 2026-09-29：讀取雲端「資料有抓到，但畫面沒有立刻換成新的」。
+       ---------------------------------------------------------
+       課程紀錄那幾張卡片為了不要在使用者打字打到一半時被重繪洗掉，
+       有一個「如果目前正聚焦在某個輸入框，就先不重繪，等它 blur
+       之後才補畫」的保護，用旗標記錄「已經延後過一次，不用重複掛
+       blur 監聽」。讀取雲端拿到新資料後，這個舊旗標已經沒有意義了
+       （它是為了另一套情境設計的），先清掉，避免萬一它殘留 true，
+       之後任何一次重繪判斷邏輯誤用到這個舊值。
+       這裡刻意不強行觸發 blur 或連續呼叫多次 render()／lessonMountAll()
+       ——實測發現這樣做在畫面資料量大時會疊出好幾輪完整重繪，導致
+       分頁明顯卡住甚至沒有回應。如果使用者當下真的正在打字，讀取雲端
+       仍然會等到他離開那個欄位才補畫最新內容（並且會先把他打到一半
+       的字收進資料，不會洗掉，見 lessonRenderTodayFlow 等函式裡的
+       blur 處理）。 */
+    try{
+      window.__renderClassroomPendingRerender = false;
+      ["lessonWeeklyPlanCore","lessonTodayFlowCore","lessonFixedCurriculumCore","lessonGrowthHighlightsCore"].forEach(id=>{
+        const el = document.getElementById(id);
+        if(el){
+          el.__v1537PendingRerender = false;
+          el.__v15383PendingRerender = false;
+          el.__v15391PendingRerender = false;
+          el.__v15392PendingRerender = false;
+        }
+      });
+    }catch(e){}
     render();
+
     renderSyncStatus();
     alert("🔥 Firebase 讀取成功");
   } catch (err) {
