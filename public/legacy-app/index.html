@@ -30986,5 +30986,264 @@ ST160_StateGuard.install();
 })();
 </script>
 
+<script>
+/* =========================================================
+   V16.0 LESSON RECORD CLEAN REWRITE (2026-09-30)
+   ---------------------------------------------------------
+   為什麼要重寫：本週主線／今天課堂流程／成長亮點這三張卡片，原本的
+   render 函式（V15.37 起）有一套「使用者正在某個欄位打字時，先不
+   重繪，等它 blur 之後才補畫」的保護，目的是避免背景重繪把使用者
+   還沒存檔的文字洗掉。但這套保護後來被更多層 wrapper（V15.38.3／
+   V15.39...）疊加覆寫，每一層各自維護一份「延後旗標」，彼此不互通；
+   一旦某次該收到的 blur 事件沒有正常觸發（觸控裝置很容易發生），
+   對應那層的旗標就會卡住，畫面停在舊內容，只有整個關閉 App 重開
+   （=完全重新載入、旗標歸零）才會恢復正常。這正是這幾天一直追的
+   「讀取雲端資料到了，畫面卻沒換」的根本原因。
+
+   新做法：完全不用「延後重繪」。這三張卡片一律「立刻」重繪，但重繪
+   前先記住目前聚焦欄位的即時內容與游標位置，重繪後原樣寫回去、
+   還原焦點——這樣不管背景資料何時更新，畫面永遠是最新的，而且使用
+   者正在打的字絕對不會因為重繪而消失，不需要靠「有沒有收到 blur」
+   這種不可靠的時機去保護。
+
+   範圍：只重寫本週主線／今天課堂流程／成長亮點。固定課綱
+   （lessonFixedCurriculumCore）刻意不動——那個容器目前被另一套完全
+   不同的「課綱母版」功能（V15.39.1/V15.39.2）搶著畫，跟這裡的自由
+   文字版本是兩個獨立資料來源，牽涉範圍不同、風險較高，留到之後
+   確認需求後再處理。
+
+   這裡直接覆寫 window.lessonRenderWeeklyPlan / lessonSaveWeeklyPlan /
+   lessonRenderTodayFlow / lessonSaveTodayFlow / lessonAddTodayTask /
+   lessonUpdateTodayPreview / lessonRenderGrowthHighlights /
+   lessonSaveGrowthHighlights，取代前面所有版本（因為是整個檔案最後
+   載入的程式碼，一定是最後生效的版本）。存檔按鈕沿用之前晚上加的
+   「存檔後自動同步雲端」邏輯（有裝置鎖定/版本衝突一樣會正確擋下來，
+   不會靜悄悄覆蓋別人的資料）。
+   ========================================================= */
+(function(){
+  'use strict';
+  if(window.__V16_LESSON_RECORD_CLEAN_REWRITE__) return;
+  window.__V16_LESSON_RECORD_CLEAN_REWRITE__ = true;
+
+  function esc(v){
+    try{ if(typeof escapeHtml === 'function') return escapeHtml(v); }catch(e){}
+    return String(v ?? '').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+  function arr(v){ return Array.isArray(v) ? v : []; }
+  function lines(raw){ return String(raw || '').split(/\n/).map(x=>x.trim()).filter(Boolean); }
+  function rec(){ try{ return typeof window.lessonRecord === 'function' ? window.lessonRecord() : null; }catch(e){ return null; } }
+  function previous(){
+    try{ if(typeof window.lessonPreferredPreviousRecord === 'function') return window.lessonPreferredPreviousRecord(); }catch(e){}
+    try{ if(typeof window.lessonPreviousRecord === 'function') return window.lessonPreviousRecord(); }catch(e){}
+    return null;
+  }
+  function persist(reason){ try{ if(typeof window.lessonSave === 'function') window.lessonSave(reason); }catch(e){} }
+  function taskTextFromWeekly(p){ return p?.taskText || lines(p?.tasks).join('\n'); }
+
+  /* 重繪前記住目前聚焦欄位的即時內容與游標，重繪後原樣還原——
+     這樣「立刻重繪」永遠安全，不需要延後、不需要等 blur。 */
+  function smartRender(containerId, html){
+    const root = document.getElementById(containerId);
+    if(!root) return;
+    const active = document.activeElement;
+    let snap = null;
+    if(active && active.id && root.contains(active) && /^(TEXTAREA|INPUT)$/.test(active.tagName || '')){
+      snap = { id:active.id, value:active.value, s:active.selectionStart, e:active.selectionEnd };
+    }
+    root.innerHTML = html;
+    if(snap){
+      const back = document.getElementById(snap.id);
+      if(back){
+        back.value = snap.value;
+        try{ back.focus({preventScroll:true}); }catch(e){ try{ back.focus(); }catch(e2){} }
+        try{ back.setSelectionRange(snap.s, snap.e); }catch(e){}
+      }
+    }
+  }
+
+  /* 存檔後自動同步雲端：有裝置鎖定或版本衝突時正確擋下、跳出警告，
+     不會靜悄悄覆蓋別人的資料；只有真的同步成功才會顯示「已同步雲端」。 */
+  async function autoSync(label){
+    try{
+      if(typeof firebase === 'undefined' || typeof firebaseDb === 'undefined'){
+        flashSaved(`✓ ${label}已儲存（本機，Firebase 尚未載入，未同步雲端）`);
+        return;
+      }
+      const lockOk = await checkDeviceLockBeforeUpload(true);
+      if(!lockOk){
+        flashSaved(`✓ ${label}已儲存（本機）－其他裝置正在編輯，尚未同步雲端`);
+        return;
+      }
+      const fresh = await checkFirebaseFreshness(false);
+      if(fresh?.cloudIsNewer){
+        showSyncConflictDialog();
+        flashSaved(`✓ ${label}已儲存（本機）－雲端有較新版本，請先處理衝突`);
+        return;
+      }
+      await firebaseUploadAll(true, true);
+      flashSaved(`✓ ${label}已儲存並同步雲端`);
+    }catch(e){
+      flashSaved(`✓ ${label}已儲存（本機）－雲端同步失敗，可再按「上傳雲端」重試`);
+    }
+  }
+
+  function clean(s){
+    return String(s||'').replace(/[✓✔□☑️]/g,'').replace(/[()（）]\s*\d+\s*分\s*[)）]/g,'').replace(/^\s*\d+\s*[、.．-]\s*/,'').replace(/\s+/g,'').trim();
+  }
+  function noteLooksLikeTaskDuplicate(note,tasks){
+    const raw=String(note||'').trim();
+    if(!raw) return false;
+    const taskTitles=arr(tasks).map(t=>clean(t?.title || t)).filter(Boolean);
+    if(!taskTitles.length) return false;
+    const pieces=raw.split(/[\n／/]+/).map(clean).filter(Boolean);
+    if(!pieces.length) return false;
+    let hits=0;
+    pieces.forEach(p=>{ if(taskTitles.some(t=>t===p || p.includes(t) || t.includes(p))) hits++; });
+    return hits >= Math.max(2, Math.ceil(pieces.length*0.6));
+  }
+  function reviewHtml(prev){
+    if(!prev) return `<div class="v1537-prev-review"><h4>📚 上週課堂回顧</h4><div class="small-muted">尚無上一堂課程紀錄。</div></div>`;
+    const f = prev.todayFlow || {};
+    const taskLines = arr(f.tasks).map(t=>`${t.done?'✓':'□'} ${t.title||''}${t.minutes?`（${t.minutes}分）`:''}`).filter(x=>clean(x));
+    const note = noteLooksLikeTaskDuplicate(f.note, f.tasks) ? '' : (f.note || '');
+    return `<div class="v1537-prev-review"><h4>📚 上週課堂回顧</h4>
+      <div class="v1537-prev-date">${esc(prev.date||'')}</div>
+      ${taskLines.length?`<div class="v1537-review-section"><b>課堂流程</b><div style="white-space:pre-wrap">${esc(taskLines.join('\n'))}</div></div>`:''}
+      ${f.reminder?`<div class="v1537-review-section"><b>提醒事項</b><div style="white-space:pre-wrap">${esc(f.reminder)}</div></div>`:''}
+      ${f.homework?`<div class="v1537-review-section"><b>回家功課</b><div style="white-space:pre-wrap">${esc(f.homework)}</div></div>`:''}
+      ${note?`<div class="v1537-review-section"><b>今日課堂補充</b><div style="white-space:pre-wrap">${esc(note)}</div></div>`:''}
+    </div>`;
+  }
+
+  /* ================= 本週主線 ================= */
+  function collectWeekly(){
+    const r = rec(); if(!r) return null;
+    r.weeklyPlan = r.weeklyPlan || {};
+    const titleEl = document.getElementById('lessonWeeklyTitle');
+    const goalEl = document.getElementById('lessonWeeklyGoal');
+    const taskTextEl = document.getElementById('lessonWeeklyTaskText');
+    const sideEl = document.getElementById('lessonWeeklySideQuest');
+    if(titleEl) r.weeklyPlan.title = titleEl.value || '';
+    if(goalEl) r.weeklyPlan.goal = goalEl.value || '';
+    if(taskTextEl) r.weeklyPlan.taskText = taskTextEl.value || '';
+    if(sideEl) r.weeklyPlan.sideQuest = sideEl.value || '';
+    if(taskTextEl) r.weeklyPlan.tasks = lines(r.weeklyPlan.taskText).map(title=>({title}));
+    r.updatedAt = new Date().toISOString();
+    return r;
+  }
+  window.lessonRenderWeeklyPlan = function(r=rec()){
+    if(!r) return;
+    const p = r.weeklyPlan || {};
+    const modeTemplates = typeof teachingModeOptions === 'function' ? teachingModeOptions() : [];
+    smartRender('lessonWeeklyPlanCore', `${reviewHtml(previous())}
+      ${modeTemplates.length ? `<div class="lesson-core-field"><label>🎛️ 套用模式模板（臨時表演/比賽等突發狀況，跳離課綱用）</label>
+        <div class="lesson-inline-actions">
+          <select id="lessonWeeklyModeTemplate">${modeTemplates.map(t=>`<option value="${esc(t.id)}">${esc(t.name||t.title||'未命名模板')}</option>`).join('')}</select>
+          <button class="lesson-core-btn gold" onclick="applyModeTemplateToWeeklyPlan(document.getElementById('lessonWeeklyModeTemplate').value)">套用到本週主線</button>
+        </div>
+      </div>` : `<div class="lesson-empty-note">尚未建立模式模板，可到「設定中心 → 模式模板」建立（例如：音樂會模式、比賽模式）。</div>`}
+      <div class="lesson-core-field"><label>本週主題</label><input id="lessonWeeklyTitle" value="${esc(p.title||'')}" placeholder="例如：長音穩定與節奏控制"></div>
+      <div class="lesson-core-field"><label>本週目標</label><textarea id="lessonWeeklyGoal" placeholder="這週想達成的能力">${esc(p.goal||'')}</textarea></div>
+      <div class="lesson-core-field"><label>本週任務文字欄流（一行一個任務）</label><textarea id="lessonWeeklyTaskText" placeholder="例如：\n呼吸健身房\n長音練習\n習作\n合奏檢查">${esc(taskTextFromWeekly(p))}</textarea></div>
+      <div class="lesson-core-field"><label>補充 / 支線任務</label><textarea id="lessonWeeklySideQuest" placeholder="可填寫加強項目、補救重點">${esc(p.sideQuest||'')}</textarea></div>
+      <div class="lesson-inline-actions"><button class="lesson-core-btn primary" onclick="lessonSaveWeeklyPlan()">儲存本週主線</button><button class="lesson-core-btn" onclick="lessonSyncWeeklyToToday()">同步文字任務到今天課堂流程</button></div>`);
+  };
+  window.lessonSaveWeeklyPlan = function(){
+    const r = collectWeekly(); if(!r) return;
+    persist('V16 本週主線');
+    window.lessonRenderWeeklyPlan(r);
+    autoSync('本週主線');
+  };
+
+  /* ================= 今天課堂流程 ================= */
+  function timeToMin(t){ const [h,m]=String(t||'10:30').split(':').map(x=>Number(x)||0); return h*60+m; }
+  function minToTime(n){ n=((Number(n)||0)+1440)%1440; return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`; }
+  function taskRowHtml(t){
+    return `<div class="lesson-flow-row"><input class="lesson-today-done lesson-done" type="checkbox" ${t.done?'checked':''} onchange="lessonUpdateTodayPreview()"><div><input class="lesson-today-title" value="${esc(t.title||'')}" placeholder="任務名稱，例如：呼吸健身房" oninput="lessonUpdateTodayPreview()"><div class="lesson-time-preview"></div></div><input class="lesson-today-min lesson-min" type="number" min="1" value="${Number(t.minutes)||5}" oninput="lessonUpdateTodayPreview()"><button class="lesson-core-btn red" onclick="this.closest('.lesson-flow-row').remove();lessonUpdateTodayPreview()">×</button></div>`;
+  }
+  function collectToday(){
+    const r = rec(); if(!r) return null;
+    r.todayFlow = r.todayFlow || {};
+    const startEl = document.getElementById('lessonTodayStartTime');
+    if(startEl) r.todayFlow.startTime = startEl.value || '10:30';
+    const container = document.getElementById('lessonTodayTasks');
+    if(container){
+      const rows = [...container.querySelectorAll('.lesson-flow-row')];
+      const oldTasks = arr(r.todayFlow.tasks);
+      r.todayFlow.tasks = rows.map((row,i)=>({
+        ...(oldTasks[i] || {}),
+        title: row.querySelector('.lesson-today-title')?.value?.trim() || '',
+        minutes: Math.max(1, Number(row.querySelector('.lesson-today-min')?.value || 1)),
+        done: !!row.querySelector('.lesson-today-done')?.checked
+      })).filter(t=>t.title);
+    }
+    const reminderEl = document.getElementById('lessonTodayReminder');
+    const homeworkEl = document.getElementById('lessonTodayHomework');
+    const noteEl = document.getElementById('lessonTodayNote');
+    if(reminderEl) r.todayFlow.reminder = reminderEl.value || '';
+    if(homeworkEl) r.todayFlow.homework = homeworkEl.value || '';
+    if(noteEl) r.todayFlow.note = noteEl.value || '';
+    r.updatedAt = new Date().toISOString();
+    try{ localStorage.setItem('battle_start_class_time', r.todayFlow.startTime); }catch(e){}
+    return r;
+  }
+  window.lessonAddTodayTask = function(title='新任務', minutes=5, done=false){
+    const wrap = document.getElementById('lessonTodayTasks'); if(!wrap) return;
+    wrap.insertAdjacentHTML('beforeend', taskRowHtml({title,minutes,done}));
+    window.lessonUpdateTodayPreview();
+  };
+  window.lessonUpdateTodayPreview = function(){
+    const start = document.getElementById('lessonTodayStartTime')?.value || '10:30';
+    let cur = timeToMin(start), total = 0;
+    const container = document.getElementById('lessonTodayTasks');
+    [...(container ? container.querySelectorAll('.lesson-flow-row') : [])].forEach(row=>{
+      const min = Math.max(1, Number(row.querySelector('.lesson-today-min')?.value || 1));
+      total += min;
+      const p = row.querySelector('.lesson-time-preview'); if(p) p.textContent = `${minToTime(cur)} - ${minToTime(cur+min)}`;
+      cur += min;
+    });
+    const t = document.getElementById('lessonTodayTotal'); if(t) t.textContent = `總計 ${total} 分鐘`;
+  };
+  window.lessonRenderTodayFlow = function(r=rec()){
+    if(!r) return;
+    const f = r.todayFlow || {};
+    smartRender('lessonTodayFlowCore', `<div class="lesson-total"><span>今天課堂流程</span><span id="lessonTodayTotal"></span></div>
+      <div class="lesson-core-field"><label>上課開始時間</label><input id="lessonTodayStartTime" type="time" value="${esc(f.startTime||'10:30')}" oninput="lessonUpdateTodayPreview()"></div>
+      <div id="lessonTodayTasks">${arr(f.tasks).map(taskRowHtml).join('')}</div>
+      <div class="lesson-inline-actions"><button class="lesson-core-btn" onclick="lessonAddTodayTask()">＋ 新增課堂任務</button><button class="lesson-core-btn primary" onclick="lessonSaveTodayFlow()">儲存今天課堂流程</button></div>
+      <div class="lesson-flow-notes">
+        <div><label>提醒事項</label><textarea id="lessonTodayReminder" placeholder="例如：先檢查高音 Sol。">${esc(f.reminder||'')}</textarea></div>
+        <div><label>回家功課</label><textarea id="lessonTodayHomework" placeholder="例如：長音4拍每天3次。">${esc(f.homework||'')}</textarea></div>
+        <div><label>今日課堂補充</label><textarea id="lessonTodayNote" placeholder="例如：節奏反應很好，但合奏同步還不穩。">${esc(f.note||'')}</textarea></div>
+      </div>`);
+    window.lessonUpdateTodayPreview();
+  };
+  window.lessonSaveTodayFlow = function(){
+    const r = collectToday(); if(!r) return;
+    persist('V16 今天課堂流程');
+    window.lessonRenderTodayFlow(r);
+    autoSync('今天課堂流程');
+  };
+
+  /* ================= 成長亮點 ================= */
+  window.lessonRenderGrowthHighlights = function(r=rec()){
+    if(!r) return;
+    smartRender('lessonGrowthHighlightsCore', `<div class="lesson-core-field"><label>成長亮點</label><textarea id="lessonGrowthText" placeholder="例如：今天節奏穩定、主動幫助同學。">${esc(r.growthHighlights?.text||'')}</textarea></div><button class="lesson-core-btn primary" onclick="lessonSaveGrowthHighlights()">儲存成長亮點</button>`);
+  };
+  window.lessonSaveGrowthHighlights = function(){
+    const r = rec(); if(!r) return;
+    r.growthHighlights = r.growthHighlights || {};
+    const el = document.getElementById('lessonGrowthText');
+    if(el) r.growthHighlights.text = el.value || '';
+    r.updatedAt = new Date().toISOString();
+    persist('V16 成長亮點');
+    window.lessonRenderGrowthHighlights(r);
+    autoSync('成長亮點');
+  };
+
+  console.info('V16.0 Lesson Record Clean Rewrite loaded（本週主線／今天課堂流程／成長亮點：立即重繪＋自動同步雲端；固定課綱不在此次範圍內）。');
+})();
+</script>
+
 </body>
 </html>
