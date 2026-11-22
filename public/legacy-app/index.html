@@ -6860,6 +6860,13 @@ function normalizeStateShape(){
 
 BattleModules.core.normalizeState = normalizeStateShape;
 
+/* 整份換掉資料。App 用的是頂層 let state，只改 window.state 不會有作用 */
+function replaceWholeState(next){
+  state = next;
+  window.state = next;
+  if(window.__RAW_STATE__) window.__RAW_STATE__ = next;
+}
+
 function ensureBackupMeta(){
   if(!state.backupMeta) state.backupMeta = {};
 }
@@ -7078,17 +7085,18 @@ function createLocalSafetyBackup(reason="manual-force-upload"){
     };
   }catch(err){
     console.warn("createLocalSafetyBackup failed", err);
-    return;
+    return Promise.resolve(false);
   }
   /* state 已在上面同步複製好，之後被覆蓋也不影響這份備份 */
-  BTBackupStore.mergeSafetyBackups([entry]).catch(err=>{
+  return BTBackupStore.mergeSafetyBackups([entry]).then(()=>true).catch(err=>{
     console.warn("createLocalSafetyBackup: IndexedDB 失敗，改存 localStorage", err);
     try{
       const backups = JSON.parse(localStorage.getItem(BT_SAFETY_BACKUP_KEY) || "[]");
       backups.unshift(entry);
       localStorage.setItem(BT_SAFETY_BACKUP_KEY, JSON.stringify(backups.slice(0,BTBackupStore.safetyKeep)));
+      return true;
     }
-    catch(e){ console.warn("createLocalSafetyBackup failed", e); }
+    catch(e){ console.warn("createLocalSafetyBackup failed", e); return false; }
   });
 }
 
@@ -13352,6 +13360,22 @@ function saveGasUrl(){
 }
 
 /* SYNC MODULE: Backup Settings */
+function renderSnapshotPanel(){
+  const box = document.getElementById("snapshotPanelBox");
+  if(!box) return;
+  const latest = localStorage.getItem(ST150_SaveCore.latestKey);
+  const count = ST150_SaveCore.listSnapshots().length;
+  box.innerHTML = `
+    <div class="note">
+      每 10 分鐘自動存一份在這台裝置，也可以自己按「立即備份」。只存在這台裝置，不會上傳雲端。<br>
+      目前 ${count} 份${latest ? `｜最近：${escapeHtml(latest.replace(ST150_SaveCore.snapshotPrefix,""))}` : ""}
+    </div>
+    <button class="btn primary" onclick="ST150_SaveCore.manualBackup()">立即備份</button>
+    <button class="btn" onclick="ST150_SaveCore.restore()">還原最近備份</button>
+    <button class="btn" onclick="ST150_SaveCore.exportLatest()">匯出最近備份</button>
+  `;
+}
+
 function renderBackupSettings(){
   ensureBackupMeta?.();
   const cloud = getCloudConfig();
@@ -13406,6 +13430,11 @@ function renderBackupSettings(){
     </section>
 
     <section class="card">
+      <h3>🛡️ 本機自動快照</h3>
+      <div id="snapshotPanelBox"></div>
+    </section>
+
+    <section class="card">
       <h3>☁️ Google Sheet 備份（進階）</h3>
       <div class="note">這區保留給需要轉成試算表、列印或行政封存時使用。平常上課建議以 Firebase 為主。</div>
 
@@ -13425,6 +13454,7 @@ function renderBackupSettings(){
       <button class="btn gold" onclick="downloadFromCloud()">完整從 Google Sheet 讀取</button>
     </section>
   `;
+  renderSnapshotPanel();
 }
 
 
@@ -20602,7 +20632,8 @@ const ST150_SaveCore = {
   },
 
   currentPayload(reason="manual"){
-    const cloned = this.safeClone(window.state || {});
+    /* 要備份真正的 state。window.state 在讀取雲端／匯入後可能還指著舊物件 */
+    const cloned = this.safeClone(state);
     cloned.__saveCore = {
       version:this.version,
       reason,
@@ -20626,14 +20657,16 @@ const ST150_SaveCore = {
 
       const key = `${this.snapshotPrefix}${this.nowLabel()}`;
       /* 快照內容存 IndexedDB（見 BTBackupStore），localStorage 只留「最新是哪份」的小指標 */
-      BTBackupStore.set(key, JSON.stringify(payload)).then(()=>{
+      this.lastWrite = BTBackupStore.set(key, JSON.stringify(payload)).then(()=>{
         try{ localStorage.setItem(this.latestKey, key); }catch(e){}
         BTBackupStore.noteSnapshotKey(key);
         this.prune();
         console.log(`ST150 snapshot saved: ${key} (${reason})`);
+        return true;
       }).catch(e=>{
         if(this.lastStateHash === hash) this.lastStateHash = "";
         console.warn("ST150 snapshot failed",e);
+        return false;
       });
       this.lastSnapshotAt = Date.now();
       this.lastStateHash = hash;
@@ -20642,6 +20675,13 @@ const ST150_SaveCore = {
       console.warn("ST150 snapshot failed",e);
       return false;
     }
+  },
+
+  /* 按鈕用：等真的寫進去才回報 */
+  async manualBackup(){
+    const ok = this.snapshot("manual", true) && await this.lastWrite;
+    alert(ok ? "已建立手動備份" : "備份失敗，請改用「匯出備份 JSON」。");
+    if(document.getElementById("snapshotPanelBox")) renderSnapshotPanel();
   },
 
   prune(){
@@ -20670,14 +20710,46 @@ const ST150_SaveCore = {
       delete payload.__saveCore;
       delete payload.__textareaCache;
 
-      window.state = payload;
+      /* 以前的快照可能存到空的或不完整的資料；直接還原會把現有資料換成預設範例 */
+      const complete = ["schools","classes","students"].every(k=>Array.isArray(payload[k]));
+      if(!complete || (!payload.students.length && state.students.length)){
+        alert("這份備份沒有完整的學生資料，已停止還原，目前資料沒有變動。");
+        return false;
+      }
+
+      const label = key.replace(this.snapshotPrefix,"");
+      const count = st => {
+        const s = cloudStateSummary(st);
+        return `學生 ${s.students}、點名 ${s.attendance}、點數 ${s.pointLogs}、成長 ${s.growthLogs}、課程紀錄 ${s.courseNotes}`;
+      };
+      if(!confirm(`要還原 ${label} 的備份嗎？\n\n目前資料：${count(state)}\n備份內容：${count(payload)}\n\n還原會蓋掉這台裝置目前的資料（會先做一份本機安全備份）。`)) return false;
+
+      if(!(await createLocalSafetyBackup("before-snapshot-restore"))){
+        alert("無法先備份目前資料，已停止還原，目前資料沒有變動。");
+        return false;
+      }
+
+      const before = state;
+      const restored = migrateState(payload);
+      /* 同步時間沿用目前的，雲端較新時上傳才仍會被擋下來 */
+      restored.backupMeta = this.safeClone(before.backupMeta);
+      try{
+        localStorage.setItem(STORE_KEY, JSON.stringify(restored));
+      }catch(e){
+        console.warn("ST150 restore save failed",e);
+        alert("裝置空間不足，無法存下還原的資料，已停止還原，目前資料沒有變動。");
+        return false;
+      }
+      replaceWholeState(restored);
+      syncStatus.dirty = true;
 
       if(textCache.st136) window.__ST136_TEXTAREA_CACHE__ = textCache.st136;
       if(textCache.st141) window.__ST141_TEXTAREA_CACHE__ = textCache.st141;
 
       try{ saveState?.(); }catch(e){}
-      try{ renderStartClassMode?.(); }catch(e){}
-      alert(`已還原備份：${key}`);
+      try{ render(); }catch(e){ console.warn("ST150 restore render failed",e); }
+      try{ renderSyncStatus(); }catch(e){}
+      alert(`已還原備份：${label}\n請先確認資料正確，再按「⬆️ 上傳雲端」寫回雲端。`);
       return true;
     }catch(e){
       console.warn("ST150 restore failed",e);
@@ -20757,7 +20829,7 @@ const ST150_SaveCore = {
       <div class="st150-savecore-panel">
         🛡️ SaveCore：自動備份已啟用｜備份數：${count}${latest ? `<br>最近備份：${latest.replace(this.snapshotPrefix,"")}` : ""}
         <div class="st150-savecore-actions">
-          <button class="st150-savecore-btn primary" onclick="ST150_SaveCore.snapshot('manual', true); alert('已建立手動備份')">立即備份</button>
+          <button class="st150-savecore-btn primary" onclick="ST150_SaveCore.manualBackup()">立即備份</button>
           <button class="st150-savecore-btn" onclick="ST150_SaveCore.restore()">還原最近備份</button>
           <button class="st150-savecore-btn" onclick="ST150_SaveCore.exportLatest()">匯出最近備份</button>
         </div>
@@ -20978,7 +21050,7 @@ const ST160_StateGuard = {
       const validation = this.repair();
       if(!validation.ok){
         console.warn("ST160 validation failed, rolling back", validation.errors);
-        window.state = before;
+        replaceWholeState(before);
         return false;
       }
 
@@ -20989,7 +21061,7 @@ const ST160_StateGuard = {
       return result === undefined ? true : result;
     }catch(e){
       console.warn("ST160 patch failed, rolling back",e);
-      window.state = before;
+      replaceWholeState(before);
       return false;
     }
   },
@@ -21001,12 +21073,16 @@ const ST160_StateGuard = {
     }
 
     const last = this.undoStack.pop();
-    window.state = this.clone(last.state);
+    const reverted = this.clone(last.state);
+    /* 同步時間沿用目前的，雲端較新時上傳才仍會被擋下來 */
+    reverted.backupMeta = this.clone(state.backupMeta);
+    replaceWholeState(reverted);
     this.repair();
     this.markDirty(`undo:${last.reason}`);
     this.requestSave("undo");
+    syncStatus.dirty = true;
 
-    try{ renderStartClassMode?.(); }catch(e){}
+    try{ render(); }catch(e){ console.warn("ST160 undo render failed",e); }
     alert(`已復原：${last.reason}`);
     return true;
   },
