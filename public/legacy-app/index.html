@@ -6896,24 +6896,173 @@ function markClean(){
    ========================================================= */
 
 /* =========================================================
+   2026-11-22 BACKUP STORE: 整份資料的備份改存 IndexedDB
+   ---------------------------------------------------------
+   一份 state 約 1.5MB，localStorage 存成 UTF-16 約要 3MB，
+   而 iPad Safari 的 localStorage 只有約 5MB。以前安全備份（最多 5 份）
+   和 ST150 快照（最多 3 份）都塞在 localStorage，第二份就爆，
+   一直跳「裝置儲存空間已滿」。
+   現在 localStorage 只留主資料 STORE_KEY 和幾個小設定；
+   bt_local_safety_backups 與 ST150_SNAPSHOT_* 全部改放 IndexedDB
+   （容量通常數百 MB 以上）。舊裝置上已存在的會在開啟時自動搬過去。
+   ========================================================= */
+const BT_SAFETY_BACKUP_KEY = "bt_local_safety_backups";
+const BT_SNAPSHOT_PREFIX = "ST150_SNAPSHOT_";
+
+const BTBackupStore = {
+  dbName:"bt_backup_store",
+  storeName:"kv",
+  safetyKeep:5,
+  _dbPromise:null,
+  _safetyQueue:Promise.resolve(),
+  _snapshotKeys:[],
+
+  open(){
+    if(this._dbPromise) return this._dbPromise;
+    this._dbPromise = new Promise((resolve,reject)=>{
+      if(typeof indexedDB === "undefined") return reject(new Error("IndexedDB 不可用"));
+      const req = indexedDB.open(this.dbName, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(this.storeName);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    this._dbPromise.catch(()=>{ this._dbPromise = null; });
+    return this._dbPromise;
+  },
+
+  async _tx(mode, fn){
+    const db = await this.open();
+    return new Promise((resolve,reject)=>{
+      const tx = db.transaction(this.storeName, mode);
+      const req = fn(tx.objectStore(this.storeName));
+      tx.oncomplete = () => resolve(req ? req.result : undefined);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  },
+
+  get(key){ return this._tx("readonly", s=>s.get(key)); },
+  set(key,value){ return this._tx("readwrite", s=>s.put(value,key)); },
+  remove(key){ return this._tx("readwrite", s=>s.delete(key)); },
+  keys(){ return this._tx("readonly", s=>s.getAllKeys()); },
+
+  /* 快照清單同步版（給畫面顯示備份數用），開啟時與每次寫入/刪除時更新 */
+  snapshotKeys(){ return this._snapshotKeys.slice(); },
+  noteSnapshotKey(key){
+    if(!this._snapshotKeys.includes(key)) this._snapshotKeys.push(key);
+    this._snapshotKeys.sort();
+  },
+  forgetSnapshotKey(key){ this._snapshotKeys = this._snapshotKeys.filter(k=>k!==key); },
+  async refreshSnapshotKeys(){
+    try{
+      const keys = await this.keys();
+      this._snapshotKeys = keys.map(String).filter(k=>k.startsWith(BT_SNAPSHOT_PREFIX)).sort();
+    }catch(e){}
+    return this.snapshotKeys();
+  },
+
+  /* 先找 IndexedDB，找不到再看 localStorage（還沒搬走的舊快照） */
+  async readSnapshot(key){
+    try{
+      const v = await this.get(key);
+      if(v != null) return v;
+    }catch(e){}
+    try{ return localStorage.getItem(key); }catch(e){ return null; }
+  },
+
+  async listSafetyBackups(){
+    return (await this.get(BT_SAFETY_BACKUP_KEY)) || [];
+  },
+
+  /* 排隊執行，避免兩次備份同時讀改寫而互相蓋掉 */
+  mergeSafetyBackups(list){
+    const run = async () => {
+      const existing = await this.listSafetyBackups();
+      const seen = new Set();
+      const merged = [...(list || []), ...existing]
+        .filter(b => b && !seen.has(b.id) && seen.add(b.id))
+        .sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")))
+        .slice(0, this.safetyKeep);
+      await this.set(BT_SAFETY_BACKUP_KEY, merged);
+    };
+    this._safetyQueue = this._safetyQueue.then(run, run);
+    return this._safetyQueue;
+  },
+
+  _legacyLocalKeys(){
+    try{
+      return Object.keys(localStorage).filter(k=>k===BT_SAFETY_BACKUP_KEY || k.startsWith(BT_SNAPSHOT_PREFIX));
+    }catch(e){
+      return [];
+    }
+  },
+
+  /* 開啟時：把舊版留在 localStorage 的備份搬進 IndexedDB，寫入成功才刪 */
+  async migrateFromLocalStorage(){
+    for(const k of this._legacyLocalKeys()){
+      try{
+        const raw = localStorage.getItem(k);
+        if(raw == null) continue;
+        if(k === BT_SAFETY_BACKUP_KEY) await this.mergeSafetyBackups(JSON.parse(raw));
+        else await this.set(k, raw);
+        localStorage.removeItem(k);
+      }catch(err){
+        console.warn("備份搬到 IndexedDB 失敗，先留在 localStorage", k, err);
+      }
+    }
+    await this.refreshSnapshotKeys();
+  },
+
+  /* 空間滿時的止血（同步）：立刻把舊版整份備份移出 localStorage 騰出空間，
+     內容已讀進記憶體，再非同步寫進 IndexedDB，不會因此遺失。 */
+  freeLegacyLocalCopies(){
+    let freed = 0;
+    for(const k of this._legacyLocalKeys()){
+      try{
+        const raw = localStorage.getItem(k);
+        localStorage.removeItem(k);
+        freed++;
+        if(raw == null) continue;
+        const write = k === BT_SAFETY_BACKUP_KEY
+          ? this.mergeSafetyBackups(JSON.parse(raw))
+          : this.set(k, raw).then(()=>this.noteSnapshotKey(k));
+        write.catch(err=>console.warn("備份搬到 IndexedDB 失敗", k, err));
+      }catch(err){
+        console.warn("清出 localStorage 備份失敗", k, err);
+      }
+    }
+    return freed;
+  }
+};
+
+window.BTBackupStore = BTBackupStore;
+BTBackupStore.migrateFromLocalStorage();
+
+/* =========================================================
    SYNC MODULE: CONFLICT FIX V7.1.1
    - 「仍使用本機」= 強制上傳本機
    - 上傳前建立本機備份點
    - 避免雲端較新判斷卡住上傳
    ========================================================= */
 function createLocalSafetyBackup(reason="manual-force-upload"){
+  let entry;
   try{
-    const backups = JSON.parse(localStorage.getItem("bt_local_safety_backups") || "[]");
-    backups.unshift({
+    entry = {
       id:makeId(),
       reason,
       createdAt:localIsoLikeString(),
       state:JSON.parse(JSON.stringify(state))
-    });
-    localStorage.setItem("bt_local_safety_backups", JSON.stringify(backups.slice(0,5)));
+    };
   }catch(err){
     console.warn("createLocalSafetyBackup failed", err);
+    return;
   }
+  /* state 已在上面同步複製好，之後被覆蓋也不影響這份備份 */
+  BTBackupStore.mergeSafetyBackups([entry]).catch(err=>{
+    console.warn("createLocalSafetyBackup: IndexedDB 失敗，改存 localStorage（只留這一份）", err);
+    try{ localStorage.setItem(BT_SAFETY_BACKUP_KEY, JSON.stringify([entry])); }
+    catch(e){ console.warn("createLocalSafetyBackup failed", e); }
+  });
 }
 
 
@@ -20449,13 +20598,18 @@ const ST150_SaveCore = {
       if(!force && hash === this.lastStateHash) return false;
 
       const key = `${this.snapshotPrefix}${this.nowLabel()}`;
-      localStorage.setItem(key, JSON.stringify(payload));
-      localStorage.setItem(this.latestKey, key);
+      /* 快照內容存 IndexedDB（見 BTBackupStore），localStorage 只留「最新是哪份」的小指標 */
+      BTBackupStore.set(key, JSON.stringify(payload)).then(()=>{
+        try{ localStorage.setItem(this.latestKey, key); }catch(e){}
+        BTBackupStore.noteSnapshotKey(key);
+        this.prune();
+        console.log(`ST150 snapshot saved: ${key} (${reason})`);
+      }).catch(e=>{
+        if(this.lastStateHash === hash) this.lastStateHash = "";
+        console.warn("ST150 snapshot failed",e);
+      });
       this.lastSnapshotAt = Date.now();
       this.lastStateHash = hash;
-      this.prune();
-
-      console.log(`ST150 snapshot saved: ${key} (${reason})`);
       return key;
     }catch(e){
       console.warn("ST150 snapshot failed",e);
@@ -20464,33 +20618,23 @@ const ST150_SaveCore = {
   },
 
   prune(){
-    try{
-      const keys = Object.keys(localStorage)
-        .filter(k=>k.startsWith(this.snapshotPrefix))
-        .sort();
-      while(keys.length > this.maxSnapshots){
-        const old = keys.shift();
-        localStorage.removeItem(old);
-      }
-    }catch(e){}
-  },
-
-  listSnapshots(){
-    try{
-      return Object.keys(localStorage)
-        .filter(k=>k.startsWith(this.snapshotPrefix))
-        .sort()
-        .reverse();
-    }catch(e){
-      return [];
+    const keys = BTBackupStore.snapshotKeys();
+    const stale = keys.slice(0, Math.max(0, keys.length - this.maxSnapshots));
+    for(const old of stale){
+      BTBackupStore.forgetSnapshotKey(old);
+      BTBackupStore.remove(old).catch(()=>{});
     }
   },
 
-  restore(key){
+  listSnapshots(){
+    return BTBackupStore.snapshotKeys().reverse();
+  },
+
+  async restore(key){
     try{
       key = key || localStorage.getItem(this.latestKey);
       if(!key) return alert("目前沒有可還原的備份");
-      const raw = localStorage.getItem(key);
+      const raw = await BTBackupStore.readSnapshot(key);
       if(!raw) return alert("找不到備份內容");
 
       const payload = JSON.parse(raw);
@@ -20515,11 +20659,12 @@ const ST150_SaveCore = {
     }
   },
 
-  exportLatest(){
+  async exportLatest(){
     try{
       const key = localStorage.getItem(this.latestKey);
       if(!key) return alert("目前沒有備份可匯出");
-      const raw = localStorage.getItem(key);
+      const raw = await BTBackupStore.readSnapshot(key);
+      if(!raw) return alert("找不到備份內容");
       const blob = new Blob([raw], {type:"application/json"});
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -20874,14 +21019,18 @@ const ST160_StateGuard = {
 
     const oldRestore = ST150_SaveCore.restore?.bind(ST150_SaveCore);
     if(oldRestore){
-      ST150_SaveCore.restore = function(key){
+      ST150_SaveCore.restore = async function(key){
         try{
           const snapshotKey = key || localStorage.getItem(this.latestKey);
           if(!snapshotKey){
             alert("目前沒有可還原的備份");
             return false;
           }
-          const raw = localStorage.getItem(snapshotKey);
+          const raw = await BTBackupStore.readSnapshot(snapshotKey);
+          if(!raw){
+            alert("找不到備份內容");
+            return false;
+          }
           const sandbox = JSON.parse(raw);
           const payload = {...sandbox};
           delete payload.__saveCore;
@@ -20892,7 +21041,7 @@ const ST160_StateGuard = {
             console.warn("ST160 blocked restore",test);
             return false;
           }
-          return oldRestore(key);
+          return await oldRestore(key);
         }catch(e){
           alert("備份無法解析，已阻止還原。");
           console.warn("ST160 restore sandbox failed",e);
@@ -27490,6 +27639,8 @@ ST160_StateGuard.install();
 
   function cleanupSnapshots(keep=2){
     metrics.cleanupRuns++;
+    // 舊版留在 localStorage 的安全備份（最多 5 份整份 state）以前從來不會被清，一起移去 IndexedDB
+    try{ window.BTBackupStore?.freeLegacyLocalCopies(); }catch(e){}
     try{
       const keys = snapshotKeys();
       const latest = localStorage.getItem('ST150_LATEST_SNAPSHOT');
@@ -27870,6 +28021,7 @@ ST160_StateGuard.install();
   }
   function cleanupSnapshots(keep=1){
     let removed=0;
+    try{ window.BTBackupStore?.freeLegacyLocalCopies(); }catch(e){}
     try{
       const keys=snapshotKeys();
       const latest=localStorage.getItem('ST150_LATEST_SNAPSHOT');
