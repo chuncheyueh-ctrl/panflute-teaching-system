@@ -6914,8 +6914,11 @@ const BTBackupStore = {
   storeName:"kv",
   safetyKeep:5,
   _dbPromise:null,
+  openTimeoutMs:8000,
   _safetyQueue:Promise.resolve(),
   _snapshotKeys:[],
+  _migration:null,
+  _migrateFailed:false,
 
   open(){
     if(this._dbPromise) return this._dbPromise;
@@ -6923,8 +6926,10 @@ const BTBackupStore = {
       if(typeof indexedDB === "undefined") return reject(new Error("IndexedDB 不可用"));
       const req = indexedDB.open(this.dbName, 1);
       req.onupgradeneeded = () => req.result.createObjectStore(this.storeName);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      /* iPad Safari 偶爾會卡住不回應；逾時當失敗處理，才不會一直等下去 */
+      const timer = setTimeout(()=>reject(new Error("IndexedDB 開啟逾時")), this.openTimeoutMs);
+      req.onsuccess = () => { clearTimeout(timer); resolve(req.result); };
+      req.onerror = () => { clearTimeout(timer); reject(req.error); };
     });
     this._dbPromise.catch(()=>{ this._dbPromise = null; });
     return this._dbPromise;
@@ -6974,17 +6979,20 @@ const BTBackupStore = {
     return (await this.get(BT_SAFETY_BACKUP_KEY)) || [];
   },
 
-  /* 排隊執行，避免兩次備份同時讀改寫而互相蓋掉 */
+  /* 讀改寫放在同一個 transaction，並排隊執行，避免兩次備份或兩個分頁互相蓋掉 */
   mergeSafetyBackups(list){
-    const run = async () => {
-      const existing = await this.listSafetyBackups();
-      const seen = new Set();
-      const merged = [...(list || []), ...existing]
-        .filter(b => b && !seen.has(b.id) && seen.add(b.id))
-        .sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")))
-        .slice(0, this.safetyKeep);
-      await this.set(BT_SAFETY_BACKUP_KEY, merged);
-    };
+    const run = () => this._tx("readwrite", store => {
+      const req = store.get(BT_SAFETY_BACKUP_KEY);
+      req.onsuccess = () => {
+        const seen = new Set();
+        const merged = [...(list || []), ...(req.result || [])]
+          .filter(b => b && !seen.has(b.id) && seen.add(b.id))
+          .sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")))
+          .slice(0, this.safetyKeep);
+        store.put(merged, BT_SAFETY_BACKUP_KEY);
+      };
+      return req;
+    });
     this._safetyQueue = this._safetyQueue.then(run, run);
     return this._safetyQueue;
   },
@@ -6997,41 +7005,56 @@ const BTBackupStore = {
     }
   },
 
-  /* 開啟時：把舊版留在 localStorage 的備份搬進 IndexedDB，寫入成功才刪 */
-  async migrateFromLocalStorage(){
+  /* 把舊版留在 localStorage 的備份搬進 IndexedDB。
+     一定是 IndexedDB 確定寫入成功後才刪 localStorage；寫入失敗或中途關頁面，
+     原本那份都還在，下次開啟會再搬一次。同時間只會有一個搬移在跑。 */
+  migrateFromLocalStorage(){
+    if(this._migration) return this._migration;
+    this._migration = this._migrateOnce()
+      .catch(err=>{ this._migrateFailed = true; console.warn("備份搬移失敗", err); })
+      .then(()=>{ this._migration = null; });
+    return this._migration;
+  },
+
+  async _migrateOnce(){
+    let failed = false;
     for(const k of this._legacyLocalKeys()){
       try{
         const raw = localStorage.getItem(k);
         if(raw == null) continue;
-        if(k === BT_SAFETY_BACKUP_KEY) await this.mergeSafetyBackups(JSON.parse(raw));
-        else await this.set(k, raw);
-        localStorage.removeItem(k);
+        if(k === BT_SAFETY_BACKUP_KEY){
+          let list = null;
+          try{ list = JSON.parse(raw); }catch(e){}
+          if(Array.isArray(list)) await this.mergeSafetyBackups(list);
+          else await this.set(k + "_unparsed", raw); /* 內容壞掉也原樣留著 */
+        }else{
+          await this.set(k, raw);
+          this.noteSnapshotKey(k);
+        }
+        /* 搬移期間內容若又變了就先不刪，留給下次搬 */
+        if(localStorage.getItem(k) === raw) localStorage.removeItem(k);
       }catch(err){
+        failed = true;
         console.warn("備份搬到 IndexedDB 失敗，先留在 localStorage", k, err);
       }
     }
+    this._migrateFailed = failed;
     await this.refreshSnapshotKeys();
   },
 
-  /* 空間滿時的止血（同步）：立刻把舊版整份備份移出 localStorage 騰出空間，
-     內容已讀進記憶體，再非同步寫進 IndexedDB，不會因此遺失。 */
+  /* 還有舊備份就啟動搬移（非同步） */
   freeLegacyLocalCopies(){
-    let freed = 0;
-    for(const k of this._legacyLocalKeys()){
-      try{
-        const raw = localStorage.getItem(k);
-        localStorage.removeItem(k);
-        freed++;
-        if(raw == null) continue;
-        const write = k === BT_SAFETY_BACKUP_KEY
-          ? this.mergeSafetyBackups(JSON.parse(raw))
-          : this.set(k, raw).then(()=>this.noteSnapshotKey(k));
-        write.catch(err=>console.warn("備份搬到 IndexedDB 失敗", k, err));
-      }catch(err){
-        console.warn("清出 localStorage 備份失敗", k, err);
-      }
-    }
-    return freed;
+    if(!this._legacyLocalKeys().length) return Promise.resolve();
+    return this.migrateFromLocalStorage();
+  },
+
+  /* 搬移中：清理程式先不要直接刪 localStorage 快照。搬移失敗過就照舊清理。 */
+  isMigrating(){ return !!this._migration && !this._migrateFailed; },
+
+  /* 存檔遇到空間滿：等舊備份搬完騰出空間再存一次，還是失敗才呼叫 onFail */
+  retryAfterFree(retry, onFail){
+    if(!this._migration && !this._legacyLocalKeys().length) return onFail();
+    this.freeLegacyLocalCopies().then(retry).catch(onFail);
   }
 };
 
@@ -7059,8 +7082,12 @@ function createLocalSafetyBackup(reason="manual-force-upload"){
   }
   /* state 已在上面同步複製好，之後被覆蓋也不影響這份備份 */
   BTBackupStore.mergeSafetyBackups([entry]).catch(err=>{
-    console.warn("createLocalSafetyBackup: IndexedDB 失敗，改存 localStorage（只留這一份）", err);
-    try{ localStorage.setItem(BT_SAFETY_BACKUP_KEY, JSON.stringify([entry])); }
+    console.warn("createLocalSafetyBackup: IndexedDB 失敗，改存 localStorage", err);
+    try{
+      const backups = JSON.parse(localStorage.getItem(BT_SAFETY_BACKUP_KEY) || "[]");
+      backups.unshift(entry);
+      localStorage.setItem(BT_SAFETY_BACKUP_KEY, JSON.stringify(backups.slice(0,BTBackupStore.safetyKeep)));
+    }
     catch(e){ console.warn("createLocalSafetyBackup failed", e); }
   });
 }
@@ -21124,11 +21151,16 @@ const ST160_StateGuard = {
             ST160_StateGuard.clearDirty();
             return;
           }catch(e3){}
-          console.warn("ST160 raw save failed after quota cleanup retry", e);
-          if(!window.__ST160_QUOTA_ALERT_SHOWN__){
-            window.__ST160_QUOTA_ALERT_SHOWN__ = true;
-            alert("⚠️ 裝置儲存空間已滿，剛剛的修改可能沒有存進去！\n請立刻到「設定中心 → 備份」匯出一份備份，並清除一些舊資料或改用雲端同步。");
-          }
+          BTBackupStore.retryAfterFree(()=>{
+            oldSave.apply(this,arguments);
+            ST160_StateGuard.clearDirty();
+          }, ()=>{
+            console.warn("ST160 raw save failed after quota cleanup retry", e);
+            if(!window.__ST160_QUOTA_ALERT_SHOWN__){
+              window.__ST160_QUOTA_ALERT_SHOWN__ = true;
+              alert("⚠️ 裝置儲存空間已滿，剛剛的修改可能沒有存進去！\n請立刻到「設定中心 → 備份」匯出一份備份，並清除一些舊資料或改用雲端同步。");
+            }
+          });
         }
       },150);
     };
@@ -27639,7 +27671,7 @@ ST160_StateGuard.install();
 
   function cleanupSnapshots(keep=2){
     metrics.cleanupRuns++;
-    // 舊版留在 localStorage 的安全備份（最多 5 份整份 state）以前從來不會被清，一起移去 IndexedDB
+    // 舊版留在 localStorage 的安全備份與快照先搬去 IndexedDB（寫入成功才刪），搬移中不直接刪
     try{ window.BTBackupStore?.freeLegacyLocalCopies(); }catch(e){}
     try{
       const keys = snapshotKeys();
@@ -27649,11 +27681,11 @@ ST160_StateGuard.install();
       (keep>0 ? keys.slice(-keep) : []).forEach(k => keepSet.add(k));
       let removed = 0;
       for(const k of keys){
-        if(!keepSet.has(k)){
+        if(!keepSet.has(k) && !window.BTBackupStore?.isMigrating()){
           try{ localStorage.removeItem(k); removed++; }catch(e){}
         }
       }
-      if(latest && !localStorage.getItem(latest)){
+      if(latest && !localStorage.getItem(latest) && !window.BTBackupStore?.snapshotKeys().includes(latest)){
         const newest = snapshotKeys().slice(-1)[0] || '';
         if(newest) localStorage.setItem('ST150_LATEST_SNAPSHOT', newest);
       }
@@ -27686,12 +27718,14 @@ ST160_StateGuard.install();
           try{
             return oldSaveState.apply(this, arguments);
           }catch(e2){
-            metrics.lastError = String(e2?.message || e2);
-            console.warn('V15.26.6 saveState retry failed', e2);
-            if(!window.__V15266_QUOTA_ALERT_SHOWN__){
-              window.__V15266_QUOTA_ALERT_SHOWN__ = true;
-              alert('⚠️ 裝置儲存空間已滿，剛剛的修改可能沒有存進去！\n請立刻到「設定中心 → 備份」匯出一份備份，並清除一些舊資料或改用雲端同步。');
-            }
+            BTBackupStore.retryAfterFree(()=>oldSaveState.apply(this, arguments), ()=>{
+              metrics.lastError = String(e2?.message || e2);
+              console.warn('V15.26.6 saveState retry failed', e2);
+              if(!window.__V15266_QUOTA_ALERT_SHOWN__){
+                window.__V15266_QUOTA_ALERT_SHOWN__ = true;
+                alert('⚠️ 裝置儲存空間已滿，剛剛的修改可能沒有存進去！\n請立刻到「設定中心 → 備份」匯出一份備份，並清除一些舊資料或改用雲端同步。');
+              }
+            });
             return false;
           }
         }
@@ -28028,7 +28062,7 @@ ST160_StateGuard.install();
       const keepSet=new Set(keep>0 ? keys.slice(-keep) : []);
       if(latest) keepSet.add(latest);
       for(const k of keys){
-        if(!keepSet.has(k)){ localStorage.removeItem(k); removed++; }
+        if(!keepSet.has(k) && !window.BTBackupStore?.isMigrating()){ localStorage.removeItem(k); removed++; }
       }
       metrics.snapshotKeysRemoved += removed;
     }catch(e){}
