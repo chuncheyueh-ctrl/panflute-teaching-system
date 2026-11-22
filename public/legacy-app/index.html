@@ -926,6 +926,23 @@ input[type="date"]{
 .week-report-toolbar button{width:auto;padding:7px 11px;border-radius:999px}
 
 
+/* 考試成績 */
+.score-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.score-actions .btn{width:auto;min-height:44px;padding:8px 14px}
+.score-fields{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.score-fields>div{flex:1 1 180px;min-width:0}
+.score-fields>div.score-actions{flex:0 1 auto}
+.score-fields select,.score-fields input{width:100% !important}
+.score-tabs{margin-top:16px}
+.score-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.score-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.score-table th,.score-table td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
+.score-table th{color:var(--muted);font-size:13px}
+.score-table .score-name{text-align:left;font-weight:900;position:sticky;left:0;background:var(--card)}
+.score-table input.score-input{width:84px;text-align:center;font-size:18px !important;font-weight:800;padding:8px;min-height:44px}
+.score-table input.score-input.bad,body.dark-mode .score-table input.score-input.bad{border-color:var(--red-dark) !important;color:var(--red-dark) !important}
+.score-message{color:var(--red-dark);font-weight:800}
+
 /* =========================================================
    DARK MODE
    ========================================================= */
@@ -6121,6 +6138,7 @@ body.st124-typing .st106-panel{
       <button data-page="classroom" class="active">🎒 上課介面</button>
       <button data-page="performance">🎭 演出中心</button>
       <button data-page="exam">🎓 升級考試</button>
+      <button data-page="scores">📝 考試成績</button>
       <button data-page="rewards">🎁 獎品兌換</button>
       <button data-page="stats">📊 統計排行</button>
       <button data-page="history">📚 紀錄查詢</button>
@@ -6181,6 +6199,7 @@ function v7PageTitle(pageId){
     student:"學生端",
     performance:"演出中心",
     exam:"升級考試",
+    scores:"考試成績",
     rewards:"獎品兌換",
     stats:"統計排行",
     history:"紀錄查詢",
@@ -6191,7 +6210,7 @@ function v7PageTitle(pageId){
 }
 
 function safeCurrentPage(){
-  const allowed = ["classroom","student","performance","exam","rewards","stats","history","settings","guide"];
+  const allowed = ["classroom","student","performance","exam","scores","rewards","stats","history","settings","guide"];
   if(typeof currentPage === "undefined" || !allowed.includes(currentPage)) currentPage = "classroom";
   return currentPage;
 }
@@ -6203,6 +6222,7 @@ function v7SafeRender(){
     if(page === "student") return renderStudentPortal();
     if(page === "performance") return (typeof renderPerformanceCenter==="function" ? renderPerformanceCenter() : renderClassroom());
     if(page === "exam") return renderExam();
+    if(page === "scores") return renderScores();
     if(page === "rewards") return renderRewards();
     if(page === "stats") return renderStats();
     if(page === "history") return renderHistory();
@@ -10999,6 +11019,403 @@ function saveTodayCourseNote(){
 /* =========================================================
    7. EXAM
    ========================================================= */
+/* =========================================================
+   考試成績（2026-11-23）
+   ---------------------------------------------------------
+   - 考試清單 state.scoreExams：依「學期＋學校」，同校各課程單位共用
+   - 成績 state.scoreRecords：依「考試＋課程單位＋學生」，各課程單位分開
+   - 每次考試有兩項：written 紙筆（評量）、practical 排笛術科，0～100
+   - 沒填的不列入排名；同分同名次，下一名跳號（1、1、3）
+   ========================================================= */
+let scoreContext = {
+  termId:currentAcademicTermId(),
+  schoolId:null,
+  classId:null,
+  examId:null,   // "summary" = 學期總表
+  sort:"seat"
+};
+const SCORE_FIELDS = {written:"紙筆測驗", practical:"排笛術科"};
+
+function scoreEnsure(){
+  state.scoreExams = ensureArray(state.scoreExams);
+  state.scoreRecords = ensureArray(state.scoreRecords);
+
+  if(!activeTerms().some(t=>t.id===scoreContext.termId)) scoreContext.termId = currentAcademicTermId();
+  const schools = activeSchools();
+  if(!schools.some(s=>s.id===scoreContext.schoolId)){
+    scoreContext.schoolId = (schools.find(s=>s.id===classContext.schoolId) || schools[0])?.id || null;
+    scoreContext.classId = null;
+  }
+  const classes = classesBySchool(scoreContext.schoolId);
+  if(!classes.some(c=>c.id===scoreContext.classId)){
+    scoreContext.classId = (classes.find(c=>c.id===classContext.classId) || classes[0])?.id || null;
+  }
+  const exams = scoreExamList();
+  if(scoreContext.examId !== "summary" && !exams.some(e=>e.id===scoreContext.examId)){
+    scoreContext.examId = exams[0]?.id || null;
+  }
+}
+
+function scoreExamList(){
+  return ensureArray(state.scoreExams)
+    .filter(e=>e.termId===scoreContext.termId && e.schoolId===scoreContext.schoolId)
+    .sort((a,b)=>(Number(a.order)||0)-(Number(b.order)||0));
+}
+
+function scoreRecord(examId,studentId){
+  return ensureArray(state.scoreRecords).find(r=>r.examId===examId && r.classId===scoreContext.classId && r.studentId===studentId);
+}
+
+function scoreValue(examId,studentId,field){
+  const v = scoreRecord(examId,studentId)?.[field];
+  return typeof v === "number" ? v : null;
+}
+
+function scoreSet(examId,studentId,field,value){
+  let rec = scoreRecord(examId,studentId);
+  if(!rec){
+    if(value === null) return;
+    rec = {examId, classId:scoreContext.classId, studentId, written:null, practical:null};
+    state.scoreRecords.push(rec);
+  }
+  rec[field] = value;
+  rec.updatedAt = localDateTimeString();
+  scoreSaveSoon();
+}
+
+/* 打字時先改記憶體，停手後再存，避免每個字都寫整份資料 */
+let scoreSaveTimer = null;
+function scoreSaveNow(){
+  clearTimeout(scoreSaveTimer);
+  scoreSaveTimer = null;
+  try{ saveState(); }catch(e){ console.warn("score saveState failed",e); }
+  try{ markDirty("考試成績"); }catch(e){ console.warn("score markDirty failed",e); }
+}
+function scoreSaveSoon(){
+  syncStatus.dirty = true;
+  clearTimeout(scoreSaveTimer);
+  scoreSaveTimer = setTimeout(scoreSaveNow,400);
+}
+window.addEventListener("pagehide",()=>{ if(scoreSaveTimer) scoreSaveNow(); });
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden" && scoreSaveTimer) scoreSaveNow(); });
+
+/* 空白 → null；0～100 → 數字（最多一位小數）；其他 → undefined（不合法） */
+function scoreParse(text){
+  const s = String(text ?? "").normalize("NFKC").trim();
+  if(!s) return null;
+  if(!/^\d{1,3}(\.\d)?$/.test(s)) return undefined;
+  const n = Number(s);
+  return n <= 100 ? n : undefined;
+}
+
+function scoreRound(n){ return Math.round((n + Number.EPSILON) * 10) / 10; }
+
+function scoreWeight(exam){
+  const w = Number(exam?.writtenWeight);
+  return exam?.writtenWeight != null && w >= 0 && w <= 100 ? w : 50;
+}
+
+/* 占比 0% 的項目不必填也能算總分 */
+function scoreTotal(exam,written,practical){
+  const w = scoreWeight(exam);
+  if((w > 0 && written === null) || (w < 100 && practical === null)) return null;
+  return scoreRound(((written ?? 0) * w + (practical ?? 0) * (100 - w)) / 100);
+}
+
+function scoreAverage(values){
+  const list = values.filter(v=>v !== null);
+  return list.length ? scoreRound(list.reduce((a,b)=>a+b,0) / list.length) : null;
+}
+
+function scoreAddRanks(rows,key){
+  const list = rows.map(r=>r[key]).filter(v=>v !== null);
+  rows.forEach(r=>{ r[key+"Rank"] = r[key] === null ? null : list.filter(v=>v > r[key]).length + 1; });
+}
+
+function scoreExamRows(exam){
+  const rows = studentsByClass(scoreContext.classId).map(student=>{
+    const written = scoreValue(exam.id,student.id,"written");
+    const practical = scoreValue(exam.id,student.id,"practical");
+    return {student, written, practical, total:scoreTotal(exam,written,practical)};
+  });
+  ["written","practical","total"].forEach(k=>scoreAddRanks(rows,k));
+  return rows;
+}
+
+/* 學期總表：只算這個課程單位已開始登記的考試；缺任何一次就不列入該項排名 */
+function scoreSummaryRows(){
+  const perExam = scoreExamList().map(exam=>({exam, rows:scoreExamRows(exam)}));
+  const students = studentsByClass(scoreContext.classId);
+  const rows = students.map((student,i)=>{
+    const row = {student, cells:perExam.map(x=>x.rows[i])};
+    ["written","practical","total"].forEach(k=>{
+      const started = perExam.filter(x=>x.rows.some(r=>r[k] !== null));
+      const values = started.map(x=>x.rows[i][k]);
+      row[k+"Avg"] = scoreAverage(values);
+      row[k] = values.length && values.every(v=>v !== null) ? row[k+"Avg"] : null;
+    });
+    return row;
+  });
+  ["written","practical","total"].forEach(k=>scoreAddRanks(rows,k));
+  return {perExam, rows};
+}
+
+function scoreSorted(rows){
+  const k = scoreContext.sort;
+  if(k === "seat") return rows;
+  return rows.slice().sort((a,b)=>(a[k+"Rank"] ?? 9999) - (b[k+"Rank"] ?? 9999));
+}
+
+function scoreText(v){ return v === null ? "－" : String(v); }
+function scoreRankText(rank){
+  if(rank === null) return "－";
+  return ({1:"🥇 ",2:"🥈 ",3:"🥉 "}[rank] || "") + rank;
+}
+
+function scoreStatsText(rows,key){
+  const list = rows.map(r=>r[key]).filter(v=>v !== null);
+  if(!list.length) return "尚未登記";
+  return `平均 ${scoreAverage(list)}｜最高 ${Math.max(...list)}｜最低 ${Math.min(...list)}｜已登記 ${list.length}/${rows.length}`;
+}
+
+function scoreChangeContext(key,value){
+  scoreContext[key] = value;
+  if(key === "schoolId") scoreContext.classId = null;
+  if(key === "termId" || key === "schoolId") scoreContext.examId = null;
+  render();
+}
+
+function scoreAddExam(kind){
+  scoreEnsure();
+  const exams = scoreExamList();
+  let name = kind;
+  if(kind === "期中考"){
+    const num = n => ["一","二","三","四","五","六","七","八","九","十"][n-1] || String(n);
+    let n = 1;
+    while(exams.some(e=>e.name === `第${num(n)}次期中考`)) n++;
+    name = `第${num(n)}次期中考`;
+  }
+  const exam = {
+    id:makeId(),
+    termId:scoreContext.termId,
+    schoolId:scoreContext.schoolId,
+    name,
+    order:Math.max(0,...exams.map(e=>Number(e.order)||0)) + 1,
+    writtenWeight:50
+  };
+  state.scoreExams.push(exam);
+  scoreContext.examId = exam.id;
+  scoreSaveNow();
+  render();
+}
+
+function scoreRenameExam(id,value){
+  const exam = findById(state.scoreExams,id);
+  const name = String(value || "").trim();
+  if(!exam || !name) return render();
+  exam.name = name;
+  scoreSaveNow();
+  render();
+}
+
+function scoreSetWeight(id,value){
+  const exam = findById(state.scoreExams,id);
+  const w = scoreParse(value);
+  if(exam && typeof w === "number"){
+    exam.writtenWeight = w;
+    scoreSaveNow();
+  }
+  render();
+}
+
+function scoreMoveExam(id,step){
+  const exams = scoreExamList();
+  const i = exams.findIndex(e=>e.id===id);
+  const j = i + step;
+  if(i < 0 || j < 0 || j >= exams.length) return;
+  [exams[i],exams[j]] = [exams[j],exams[i]];
+  exams.forEach((e,idx)=>{ e.order = idx + 1; });
+  scoreSaveNow();
+  render();
+}
+
+function scoreDeleteExam(id){
+  const exam = findById(state.scoreExams,id);
+  if(!exam) return;
+  const records = state.scoreRecords.filter(r=>r.examId===id && (typeof r.written === "number" || typeof r.practical === "number"));
+  const classNames = [...new Set(records.map(r=>className(r.classId)))].join("、");
+  const detail = records.length ? `\n\n會一起刪除 ${records.length} 位學生的成績（${classNames}），無法復原。` : "\n\n目前還沒有登記成績。";
+  if(!confirm(`刪除「${schoolName(exam.schoolId)} ${termName(exam.termId)} ${exam.name}」？${detail}`)) return;
+  state.scoreExams = state.scoreExams.filter(e=>e.id!==id);
+  state.scoreRecords = state.scoreRecords.filter(r=>r.examId!==id);
+  scoreContext.examId = null;
+  scoreSaveNow();
+  render();
+}
+
+function scoreInputFocus(el){
+  el.dataset.before = el.value;
+  el.select();
+}
+
+function scoreInput(el){
+  const {exam,student,field,before} = el.dataset;
+  const value = scoreParse(el.value);
+  const bad = value === undefined;
+  el.classList.toggle("bad",bad);
+  /* 不合法時退回進入這格之前的成績，不留下打到一半的數字 */
+  scoreSet(exam,student,field,bad ? (scoreParse(before) ?? null) : value);
+  scoreRefreshComputed();
+}
+
+function scoreInputBlur(el){
+  const value = scoreParse(el.value);
+  if(value !== undefined){ el.value = value ?? ""; return; }
+  const typed = el.value;
+  el.value = el.dataset.before || "";
+  el.classList.remove("bad");
+  const msg = document.getElementById("scoreMessage");
+  if(msg) msg.textContent = `「${typed}」不是 0～100 的分數，已改回原本的內容。`;
+}
+
+/* Enter 跳到同一欄的下一位學生 */
+function scoreInputKey(event,el){
+  if(event.key !== "Enter" || event.isComposing) return;
+  event.preventDefault();
+  const list = [...document.querySelectorAll(`.score-input[data-field="${el.dataset.field}"]`)];
+  const next = list[list.indexOf(el) + 1];
+  if(next) next.focus(); else el.blur();
+}
+
+/* 打字時只更新名次、總分與統計，不重畫整頁，才不會跳掉鍵盤 */
+function scoreRefreshComputed(){
+  const exam = findById(state.scoreExams,scoreContext.examId);
+  if(!exam) return;
+  const rows = scoreExamRows(exam);
+  rows.forEach(r=>{
+    const set = (name,text)=>{
+      const cell = document.getElementById(`score_${name}_${r.student.id}`);
+      if(cell) cell.textContent = text;
+    };
+    set("written",scoreRankText(r.writtenRank));
+    set("practical",scoreRankText(r.practicalRank));
+    set("sum",scoreText(r.total));
+    set("total",scoreRankText(r.totalRank));
+  });
+  const stats = document.getElementById("scoreStats");
+  if(stats) stats.innerHTML = scoreStatsHtml(rows);
+}
+
+function scoreStatsHtml(rows){
+  return `<b>紙筆測驗</b>：${scoreStatsText(rows,"written")}<br><b>排笛術科</b>：${scoreStatsText(rows,"practical")}<br><b>總分</b>：${scoreStatsText(rows,"total")}`;
+}
+
+function scoreSortSelect(){
+  const options = [["seat","座號"],["written","紙筆名次"],["practical","術科名次"],["total","總名次"]];
+  return `<select onchange="scoreChangeContext('sort',this.value)">
+    ${options.map(([id,label])=>`<option value="${id}" ${scoreContext.sort===id?"selected":""}>${label}</option>`).join("")}
+  </select>`;
+}
+
+function renderScoreExamCard(exam){
+  const exams = scoreExamList();
+  const idx = exams.findIndex(e=>e.id===exam.id);
+  const rows = scoreExamRows(exam);
+  const w = scoreWeight(exam);
+  const input = (r,field)=>`<input class="score-input" type="text" inputmode="decimal" autocomplete="off"
+    aria-label="${escapeHtml(r.student.name)} ${SCORE_FIELDS[field]}"
+    data-exam="${exam.id}" data-student="${r.student.id}" data-field="${field}" value="${r[field] ?? ""}"
+    onfocus="scoreInputFocus(this)" oninput="scoreInput(this)" onblur="scoreInputBlur(this)" onkeydown="scoreInputKey(event,this)">`;
+
+  return `
+    <section class="card">
+      <div class="score-fields">
+        <div><label>考試名稱</label><input value="${escapeHtml(exam.name)}" onchange="scoreRenameExam('${exam.id}',this.value)"></div>
+        <div><label>紙筆占總分 %</label><input inputmode="decimal" value="${w}" onchange="scoreSetWeight('${exam.id}',this.value)"></div>
+        <div><label>排序方式</label>${scoreSortSelect()}</div>
+        <div class="score-actions">
+          <button class="btn" ${idx<=0?"disabled":""} onclick="scoreMoveExam('${exam.id}',-1)" aria-label="往前移">◀</button>
+          <button class="btn" ${idx>=exams.length-1?"disabled":""} onclick="scoreMoveExam('${exam.id}',1)" aria-label="往後移">▶</button>
+          <button class="btn red" onclick="scoreDeleteExam('${exam.id}')">刪除這次考試</button>
+        </div>
+      </div>
+      <div class="small-muted" style="margin:10px 0">總分＝紙筆 ${w}%＋術科 ${scoreRound(100-w)}%。分數會自動儲存；沒填的不列入排名，同分同名次。</div>
+      <div class="score-message" id="scoreMessage" role="status"></div>
+      ${rows.length ? `
+      <div class="score-scroll"><table class="score-table">
+        <thead><tr><th>座號</th><th>姓名</th><th>紙筆測驗</th><th>紙筆名次</th><th>排笛術科</th><th>術科名次</th><th>總分</th><th>總名次</th></tr></thead>
+        <tbody>${scoreSorted(rows).map(r=>`<tr>
+          <td>${escapeHtml(r.student.seat || "")}</td>
+          <td class="score-name">${escapeHtml(r.student.name)}</td>
+          <td>${input(r,"written")}</td>
+          <td id="score_written_${r.student.id}">${scoreRankText(r.writtenRank)}</td>
+          <td>${input(r,"practical")}</td>
+          <td id="score_practical_${r.student.id}">${scoreRankText(r.practicalRank)}</td>
+          <td id="score_sum_${r.student.id}"><b>${scoreText(r.total)}</b></td>
+          <td id="score_total_${r.student.id}">${scoreRankText(r.totalRank)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      <div class="note" id="scoreStats">${scoreStatsHtml(rows)}</div>` : `<div class="note">這個課程單位目前沒有學生。</div>`}
+    </section>`;
+}
+
+function renderScoreSummaryCard(){
+  const {perExam, rows} = scoreSummaryRows();
+  if(!rows.length) return `<section class="card"><div class="note">這個課程單位目前沒有學生。</div></section>`;
+  return `
+    <section class="card">
+      <div class="score-fields">
+        <div><h3 style="margin:0">📋 學期總表</h3></div>
+        <div><label>排序方式</label>${scoreSortSelect()}</div>
+      </div>
+      <div class="small-muted" style="margin:10px 0">平均只算已經登記的成績。已開始登記的考試只要缺一次，該項就不列入名次。</div>
+      <div class="score-scroll"><table class="score-table">
+        <thead>
+          <tr><th rowspan="2">座號</th><th rowspan="2">姓名</th>${perExam.map(x=>`<th colspan="3">${escapeHtml(x.exam.name)}</th>`).join("")}<th colspan="2">紙筆</th><th colspan="2">術科</th><th colspan="2">總成績</th></tr>
+          <tr>${perExam.map(()=>`<th>紙筆</th><th>術科</th><th>總分</th>`).join("")}${"<th>平均</th><th>名次</th>".repeat(3)}</tr>
+        </thead>
+        <tbody>${scoreSorted(rows).map(r=>`<tr>
+          <td>${escapeHtml(r.student.seat || "")}</td>
+          <td class="score-name">${escapeHtml(r.student.name)}</td>
+          ${r.cells.map(c=>`<td>${scoreText(c.written)}</td><td>${scoreText(c.practical)}</td><td>${scoreText(c.total)}</td>`).join("")}
+          ${["written","practical","total"].map(k=>`<td><b>${scoreText(r[k+"Avg"])}</b></td><td>${scoreRankText(r[k+"Rank"])}</td>`).join("")}
+        </tr>`).join("")}</tbody>
+      </table></div>
+    </section>`;
+}
+
+function renderScores(){
+  scoreEnsure();
+  const exams = scoreExamList();
+  const exam = findById(exams,scoreContext.examId);
+  const canAdd = !!scoreContext.schoolId;
+
+  document.getElementById("app").innerHTML = `
+    <section class="card">
+      <div class="score-fields">
+        <div><label>學年 / 學期</label>
+          <select onchange="scoreChangeContext('termId',this.value)">${optionList(activeTerms(),scoreContext.termId)}</select></div>
+        <div><label>學校</label>
+          <select onchange="scoreChangeContext('schoolId',this.value)">${optionList(activeSchools(),scoreContext.schoolId)}</select></div>
+        <div><label>課程單位</label>
+          <select onchange="scoreChangeContext('classId',this.value)">${optionList(classesBySchool(scoreContext.schoolId),scoreContext.classId)}</select></div>
+      </div>
+      <div class="score-actions" style="margin-top:12px">
+        <button class="btn primary" ${canAdd?"":"disabled"} onclick="scoreAddExam('期中考')">＋ 期中考</button>
+        <button class="btn primary" ${canAdd?"":"disabled"} onclick="scoreAddExam('期末考')">＋ 期末考</button>
+        <span class="small-muted">考試次數依學期與學校設定，同校各課程單位共用；成績各自分開。</span>
+      </div>
+    </section>
+    ${exams.length ? `
+    <div class="tabs score-tabs">
+      ${exams.map(e=>`<button class="${exam?.id===e.id?"active":""}" onclick="scoreChangeContext('examId','${e.id}')">${escapeHtml(e.name)}</button>`).join("")}
+      <button class="${scoreContext.examId==="summary"?"active":""}" onclick="scoreChangeContext('examId','summary')">📋 學期總表</button>
+    </div>
+    ${exam ? renderScoreExamCard(exam) : renderScoreSummaryCard()}` : `
+    <section class="card"><div class="note">這個學期還沒有考試。請按上面的「＋ 期中考」新增，名稱之後可以自己改。</div></section>`}
+  `;
+}
+
 function renderExam(){
   ensureExamContext();
 
@@ -12617,6 +13034,7 @@ function deleteStudent(id){
   state.enrollments = state.enrollments.filter(e=>e.studentId!==id);
   state.attendance = state.attendance.filter(a=>a.studentId!==id);
   state.examLogs = state.examLogs.filter(l=>l.studentId!==id);
+  state.scoreRecords = ensureArray(state.scoreRecords).filter(r=>r.studentId!==id);
   delete state.points[id];
   saveState();
   render();
@@ -29429,7 +29847,7 @@ ST160_StateGuard.install();
   if(window.__V15341_SIDEBAR_ROUTE_CORE__) return;
   window.__V15341_SIDEBAR_ROUTE_CORE__ = true;
 
-  const allowed = ['classroom','student','performance','exam','rewards','stats','history','settings','guide'];
+  const allowed = ['classroom','student','performance','exam','scores','rewards','stats','history','settings','guide'];
   const metrics = {
     version: VERSION,
     file: FILE,
@@ -29441,7 +29859,7 @@ ST160_StateGuard.install();
 
   function pageTitle(page){
     try{ if(typeof v7PageTitle === 'function') return v7PageTitle(page); }catch(e){}
-    return ({classroom:'上課介面',student:'學生端',performance:'演出中心',exam:'升級考試',rewards:'獎品兌換',stats:'統計排行',history:'紀錄查詢',settings:'設定中心',guide:'教學手冊'})[page] || '教學管理系統';
+    return ({classroom:'上課介面',student:'學生端',performance:'演出中心',exam:'升級考試',scores:'考試成績',rewards:'獎品兌換',stats:'統計排行',history:'紀錄查詢',settings:'設定中心',guide:'教學手冊'})[page] || '教學管理系統';
   }
   function setLexical(name, value){ try{ window[name] = value; }catch(e){} try{ eval(name + ' = value'); }catch(e){} }
   function getLexicalPage(){ try{ return (typeof currentPage !== 'undefined') ? currentPage : (window.currentPage || 'classroom'); }catch(e){ return window.currentPage || 'classroom'; } }
