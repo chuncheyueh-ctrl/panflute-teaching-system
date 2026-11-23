@@ -8892,7 +8892,7 @@ setInterval(checkScheduleAutoSelect, 10000);
 function startClassStudentPhotoHtml(st){
   const url = st.photoUrl || st.photo || st.imageUrl || "";
   if(url){
-    return `<img class="start-student-photo" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start-student-photo&quot;>👤</div>'">`;
+    return `<img class="start-student-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start-student-photo&quot;>👤</div>'">`;
   }
   return `<div class="start-student-photo">👤</div>`;
 }
@@ -10167,7 +10167,7 @@ function renderStudentPortal(){
       </div>
 
       <div class="student-portal-hero">
-        ${photo ? `<img class="student-portal-photo" src="${escapeHtml(photo)}">` : `<div class="student-portal-photo">🐾</div>`}
+        ${photo ? `<img class="student-portal-photo" loading="lazy" decoding="async" src="${escapeHtml(photo)}">` : `<div class="student-portal-photo">🐾</div>`}
         <div>
           <div class="student-portal-name">${escapeHtml(st.name || "未命名學生")}</div>
           <div class="student-portal-level">Lv.${lv.level}｜${escapeHtml(school?.name || "未指定學校")}｜${escapeHtml(cls?.name || "未指定課程")}</div>
@@ -10487,7 +10487,7 @@ function renderClassroomRollcall(students){
         return `
           <article class="card student-card">
             <div class="student-head">
-              ${student.photo ? `<img class="student-avatar" src="${student.photo}" alt="${escapeHtml(student.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center;font-size:24px">👦</div>`}
+              ${student.photo ? `<img class="student-avatar" loading="lazy" decoding="async" src="${student.photo}" alt="${escapeHtml(student.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center;font-size:24px">👦</div>`}
               <div>
                 <div class="student-name">${escapeHtml(student.name)}</div>
                 <div class="student-meta">
@@ -12242,8 +12242,8 @@ function resizeImageForUpload(file, maxSize=1200, quality=.82){
   });
 }
 
-async function uploadImageToImgBB(file){
-  const imageBase64 = await resizeImageForUpload(file,1200,.82);
+async function uploadImageToImgBB(file, maxSize=1200, quality=.82){
+  const imageBase64 = await resizeImageForUpload(file,maxSize,quality);
   const formData = new FormData();
   formData.append("key", IMGBB_API_KEY);
   formData.append("image", imageBase64);
@@ -12286,10 +12286,11 @@ async function handleRewardImage(file, rewardId=null){
   }
 }
 
+/* 大頭貼最大只顯示約 130px，上傳 400px 就夠清楚（含高解析螢幕），檔案小很多、載入快 */
 async function handleStudentPhoto(file, studentId=null){
   if(!file) return;
   try{
-    const url = await uploadImageToImgBB(file);
+    const url = await uploadImageToImgBB(file,400,.85);
     if(studentId){
       const student = findById(state.students,studentId);
       if(student){
@@ -13481,7 +13482,7 @@ function renderStudentSettings(){
         ${studentList.map(s=>`
           <tr class="${s.active===false?'inactive-row':''}">
             <td>
-              ${s.photo ? `<img class="student-avatar" src="${s.photo}" alt="${escapeHtml(s.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center">👦</div>`}
+              ${s.photo ? `<img class="student-avatar" loading="lazy" decoding="async" src="${s.photo}" alt="${escapeHtml(s.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center">👦</div>`}
               <input style="margin-top:6px" value="${escapeHtml(s.photo || "")}" placeholder="照片網址" onchange="findById(state.students,'${s.id}').photo=this.value.trim(); saveState(); render()">
               <input style="margin-top:6px" type="file" accept="image/*" onchange="handleStudentPhoto(this.files[0],'${s.id}')">
             </td>
@@ -14494,7 +14495,7 @@ function start931Name(typeId){
 function start931PhotoHtml(st){
   const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
   if(url){
-    return `<img class="start931-photo" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start931-photo&quot;>👤</div>'">`;
+    return `<img class="start931-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start931-photo&quot;>👤</div>'">`;
   }
   return `<div class="start931-photo">👤</div>`;
 }
@@ -14605,7 +14606,7 @@ function start933StudentPoints(studentId){
 function start933PhotoHtml(st){
   const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
   if(url){
-    return `<img class="start933-photo" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start933-photo&quot;>👤</div>'">`;
+    return `<img class="start933-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start933-photo&quot;>👤</div>'">`;
   }
   return `<div class="start933-photo">👤</div>`;
 }
@@ -14849,7 +14850,7 @@ function sc939NowMin(){
 
 function sc939Photo(st){
   const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url) return `<img class="sc939-photo" src="${sc939Esc(url)}" onerror="this.outerHTML='<div class=&quot;sc939-photo&quot;>👤</div>'">`;
+  if(url) return `<img class="sc939-photo" loading="lazy" decoding="async" src="${sc939Esc(url)}" onerror="this.outerHTML='<div class=&quot;sc939-photo&quot;>👤</div>'">`;
   return `<div class="sc939-photo">👤</div>`;
 }
 
@@ -15996,7 +15997,7 @@ function st106Points(studentId){
 }
 function st106Photo(st){
   const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url) return `<img class="st106-photo" src="${st106Esc(url)}" onerror="this.outerHTML='<div class=&quot;st106-photo&quot;>👤</div>'">`;
+  if(url) return `<img class="st106-photo" loading="lazy" decoding="async" src="${st106Esc(url)}" onerror="this.outerHTML='<div class=&quot;st106-photo&quot;>👤</div>'">`;
   return `<div class="st106-photo">👤</div>`;
 }
 function st106AttendanceMeta(id){
@@ -28667,7 +28668,7 @@ ST160_StateGuard.install();
   function school(){ try{ return (typeof st106School === 'function') ? st106School() : null; }catch(e){ return null; } }
   function photo(st){
     const url = st?.photoUrl || st?.photo || st?.imageUrl || '';
-    if(url) return `<img class="v1529-avatar-img" src="${esc(url)}" alt="${esc(st?.name||'學生')}" onerror="this.outerHTML='<div class=&quot;v1529-avatar-fallback&quot;>👤</div>'">`;
+    if(url) return `<img class="v1529-avatar-img" loading="lazy" decoding="async" src="${esc(url)}" alt="${esc(st?.name||'學生')}" onerror="this.outerHTML='<div class=&quot;v1529-avatar-fallback&quot;>👤</div>'">`;
     return `<div class="v1529-avatar-fallback">👤</div>`;
   }
   function xp(st){ try{ return (typeof st106Xp === 'function') ? st106Xp(st.id) : (Number(st?.xp || 0)||0); }catch(e){ return Number(st?.xp||0)||0; } }
