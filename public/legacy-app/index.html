@@ -942,6 +942,15 @@ input[type="date"]{
 .score-table input.score-input{width:84px;text-align:center;font-size:18px !important;font-weight:800;padding:8px;min-height:44px}
 .score-table input.score-input.bad,body.dark-mode .score-table input.score-input.bad{border-color:var(--red-dark) !important;color:var(--red-dark) !important}
 .score-message{color:var(--red-dark);font-weight:800}
+.score-bonus-bar{margin:4px 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:14px}
+.score-bonus-done{color:var(--mint-dark);font-weight:800}
+.score-bonus-todo{color:var(--red-dark);font-weight:800}
+.score-bonus-rules{margin-top:8px}
+.score-bonus-rules summary{cursor:pointer;font-weight:700;color:var(--muted);min-height:32px;padding:4px 0}
+.score-bonus-rule-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.score-bonus-rule-row input{width:84px !important;text-align:center}
+.score-bonus-rule-row select{width:auto !important}
+.score-bonus-rules .btn{width:auto;min-height:40px;padding:6px 12px}
 
 /* =========================================================
    DARK MODE
@@ -11273,7 +11282,9 @@ function saveTodayCourseNote(){
    ---------------------------------------------------------
    - 考試清單 state.scoreExams：依「學期＋學校」，同校各課程單位共用
    - 成績 state.scoreRecords：依「考試＋課程單位＋學生」，各課程單位分開
-   - 每次考試有兩項：written 紙筆（評量）、practical 排笛術科，0～100
+   - 每次考試有兩項：written 紙筆（評量）、practical 第二項，0～100
+     第二項依課程單位設定為「排笛術科」或「平時成績」（class.scoreSecondKind），資料欄位都是 practical
+   - 發點數：規則 state.scoreBonusRules，已發紀錄 state.scoreBonusAwards（考試＋課程單位＋學生）
    - 沒填的不列入排名；同分同名次，下一名跳號（1、1、3）
    ========================================================= */
 let scoreContext = {
@@ -11283,11 +11294,27 @@ let scoreContext = {
   examId:null,   // "summary" = 學期總表
   sort:"seat"
 };
-const SCORE_FIELDS = {written:"紙筆測驗", practical:"排笛術科"};
+const SCORE_SECOND_KINDS = {practical:"排笛術科", regular:"平時成績"};
+function scoreSecondKind(){
+  return findById(state.classes,scoreContext.classId)?.scoreSecondKind === "regular" ? "regular" : "practical";
+}
+function scoreSecondLabel(){ return SCORE_SECOND_KINDS[scoreSecondKind()]; }
+function scoreSecondShort(){ return scoreSecondKind() === "regular" ? "平時" : "術科"; }
+function scoreFieldLabel(field){ return field === "written" ? "紙筆測驗" : scoreSecondLabel(); }
+
+function scoreSetSecondKind(kind){
+  const cls = findById(state.classes,scoreContext.classId);
+  if(!cls || !SCORE_SECOND_KINDS[kind]) return;
+  cls.scoreSecondKind = kind;
+  scoreSaveNow();
+  render();
+}
 
 function scoreEnsure(){
   state.scoreExams = ensureArray(state.scoreExams);
   state.scoreRecords = ensureArray(state.scoreRecords);
+  state.scoreBonusAwards = ensureArray(state.scoreBonusAwards);
+  state.scoreBonusRules = scoreBonusRules();
 
   if(!activeTerms().some(t=>t.id===scoreContext.termId)) scoreContext.termId = currentAcademicTermId();
   const schools = activeSchools();
@@ -11493,7 +11520,9 @@ function scoreDeleteExam(id){
   if(!exam) return;
   const records = state.scoreRecords.filter(r=>r.examId===id && (typeof r.written === "number" || typeof r.practical === "number"));
   const classNames = [...new Set(records.map(r=>className(r.classId)))].join("、");
-  const detail = records.length ? `\n\n會一起刪除 ${records.length} 位學生的成績（${classNames}），無法復原。` : "\n\n目前還沒有登記成績。";
+  const awarded = ensureArray(state.scoreBonusAwards).some(a=>a.examId===id && a.points);
+  const detail = (records.length ? `\n\n會一起刪除 ${records.length} 位學生的成績（${classNames}），無法復原。` : "\n\n目前還沒有登記成績。")
+    + (awarded ? "\n已經發出的點數不會自動收回；要收回請先按「收回這次的點數」。" : "");
   if(!confirm(`刪除「${schoolName(exam.schoolId)} ${termName(exam.termId)} ${exam.name}」？${detail}`)) return;
   state.scoreExams = state.scoreExams.filter(e=>e.id!==id);
   state.scoreRecords = state.scoreRecords.filter(r=>r.examId!==id);
@@ -11550,17 +11579,178 @@ function scoreRefreshComputed(){
     set("practical",scoreRankText(r.practicalRank));
     set("sum",scoreText(r.total));
     set("total",scoreRankText(r.totalRank));
+    const bonus = document.getElementById(`score_bonus_${r.student.id}`);
+    if(bonus) bonus.innerHTML = scoreBonusCell(exam,r);
   });
+  const banner = document.getElementById("scoreBonusBar");
+  if(banner) banner.outerHTML = scoreBonusBarHtml(exam,rows);
   const stats = document.getElementById("scoreStats");
   if(stats) stats.innerHTML = scoreStatsHtml(rows);
 }
 
+/* =========================================================
+   依成績發點數
+   - 規則：分數達到某個門檻就加幾點，取符合的最高一級（不累加）
+   - 每位學生「這次考試」應得點數 − 已發點數 = 這次要發的；
+     已發完的不會再發，之後改了成績或規則只補（或扣回）差額
+   ========================================================= */
+const SCORE_BONUS_BASIS = {total:"總分", written:"紙筆測驗", practical:"第二項"};
+function scoreBonusRules(){
+  const r = state.scoreBonusRules && typeof state.scoreBonusRules === "object" ? state.scoreBonusRules : {};
+  const tiers = ensureArray(r.tiers)
+    .map(t=>({min:Number(t.min), points:Number(t.points)}))
+    .filter(t=>Number.isFinite(t.min) && Number.isFinite(t.points));
+  return {
+    basis:SCORE_BONUS_BASIS[r.basis] ? r.basis : "total",
+    tiers:Array.isArray(r.tiers) ? tiers : [{min:100,points:5},{min:95,points:3}]
+  };
+}
+function scoreBonusBasisLabel(basis){ return basis === "practical" ? scoreSecondLabel() : SCORE_BONUS_BASIS[basis]; }
+function scoreBonusScore(row){
+  const basis = scoreBonusRules().basis;
+  return basis === "written" ? row.written : basis === "practical" ? row.practical : row.total;
+}
+function scoreBonusTarget(row){
+  const score = scoreBonusScore(row);
+  if(score === null) return 0;
+  const hit = scoreBonusRules().tiers.filter(t=>score >= t.min).sort((a,b)=>b.min-a.min)[0];
+  return hit ? hit.points : 0;
+}
+function scoreBonusGiven(examId,studentId){
+  return ensureArray(state.scoreBonusAwards)
+    .filter(a=>a.examId===examId && a.classId===scoreContext.classId && a.studentId===studentId)
+    .reduce((sum,a)=>sum + (Number(a.points) || 0),0);
+}
+function scoreBonusPlan(exam,rows){
+  return rows.map(row=>{
+    const target = scoreBonusTarget(row), given = scoreBonusGiven(exam.id,row.student.id);
+    return {row, target, given, diff:target - given};
+  });
+}
+function scoreSigned(n){ return (n > 0 ? "+" : "") + n; }
+function scoreBonusCell(exam,row){
+  const given = scoreBonusGiven(exam.id,row.student.id), target = scoreBonusTarget(row);
+  if(!given && !target) return `<span class="small-muted">－</span>`;
+  if(given === target) return `<span class="score-bonus-done">✅ 已發 ${scoreSigned(given)}</span>`;
+  if(!given) return `<span class="score-bonus-todo">待發 ${scoreSigned(target)}</span>`;
+  return `<span class="score-bonus-todo">已發 ${scoreSigned(given)}，應為 ${scoreSigned(target)}</span>`;
+}
+function scoreBonusBarHtml(exam,rows){
+  const plan = scoreBonusPlan(exam,rows);
+  const todo = plan.filter(p=>p.diff);
+  const given = plan.filter(p=>p.given);
+  const last = ensureArray(state.scoreBonusAwards).filter(a=>a.examId===exam.id && a.classId===scoreContext.classId).map(a=>a.at).sort().at(-1);
+  let status;
+  if(todo.length) status = `<span class="score-bonus-todo">${given.length ? "成績或規則有變動，" : ""}${todo.length} 位學生待發點數</span>`;
+  else if(given.length) status = `<span class="score-bonus-done">✅ 這次考試已發完點數${last ? `（${escapeHtml(safeFormatDateTime(last))}）` : ""}</span>`;
+  else status = `<span class="small-muted">目前沒有學生達到發點數的分數</span>`;
+  return `<div class="score-bonus-bar" id="scoreBonusBar">
+    <div class="score-actions">
+      <button class="btn gold" ${todo.length ? "" : "disabled"} onclick="scoreBonusAward('${exam.id}')">🎁 依成績發點數</button>
+      ${status}
+      ${given.length ? `<button class="btn" onclick="scoreBonusRevoke('${exam.id}')">收回這次的點數</button>` : ""}
+    </div>
+    ${scoreBonusRulesHtml()}
+  </div>`;
+}
+function scoreBonusRulesHtml(){
+  const rules = scoreBonusRules();
+  const tiers = rules.tiers.slice().sort((a,b)=>b.min-a.min);
+  return `<details class="score-bonus-rules">
+    <summary>發點數規則：依${escapeHtml(scoreBonusBasisLabel(rules.basis))}，${tiers.length ? tiers.map(t=>`${t.min} 分以上 ${scoreSigned(t.points)} 點`).join("、") : "尚未設定"}（取最高一級，不累加）</summary>
+    <div class="score-bonus-rule-row">
+      <label>依據</label>
+      <select onchange="scoreBonusSetBasis(this.value)">${Object.keys(SCORE_BONUS_BASIS).map(k=>`<option value="${k}" ${rules.basis===k?"selected":""}>${escapeHtml(scoreBonusBasisLabel(k))}</option>`).join("")}</select>
+    </div>
+    ${tiers.map((t,i)=>`<div class="score-bonus-rule-row">
+      <input inputmode="decimal" aria-label="門檻分數" value="${t.min}" onchange="scoreBonusSetTier(${i},'min',this.value)"><span>分以上，加</span>
+      <input inputmode="numeric" aria-label="點數" value="${t.points}" onchange="scoreBonusSetTier(${i},'points',this.value)"><span>點</span>
+      <button class="btn red" onclick="scoreBonusRemoveTier(${i})" aria-label="刪除這一級">×</button>
+    </div>`).join("")}
+    <button class="btn" onclick="scoreBonusAddTier()">＋ 新增一級</button>
+    <div class="small-muted">規則所有學校、班級共用。改了規則後，已發過點數的學生只會補發或扣回差額。</div>
+  </details>`;
+}
+function scoreBonusSaveRules(tiers,basis){
+  const rules = scoreBonusRules();
+  state.scoreBonusRules = {basis:basis || rules.basis, tiers:(tiers || rules.tiers).slice().sort((a,b)=>b.min-a.min)};
+  scoreSaveNow();
+  scoreKeepRulesOpen = true;
+  render();
+}
+let scoreKeepRulesOpen = false;
+function scoreBonusSetBasis(basis){ if(SCORE_BONUS_BASIS[basis]) scoreBonusSaveRules(null,basis); }
+function scoreBonusSetTier(i,key,value){
+  const tiers = scoreBonusRules().tiers.slice().sort((a,b)=>b.min-a.min);
+  const n = key === "min" ? scoreParse(value) : Number(String(value).normalize("NFKC").trim());
+  if(!tiers[i] || typeof n !== "number" || !Number.isFinite(n) || (key === "points" && !Number.isInteger(n))){
+    alert(key === "min" ? "門檻請填 0～100 的分數。" : "點數請填整數。");
+    return scoreBonusSaveRules(tiers);
+  }
+  tiers[i] = {...tiers[i], [key]:n};
+  scoreBonusSaveRules(tiers);
+}
+function scoreBonusAddTier(){
+  const tiers = scoreBonusRules().tiers;
+  const low = tiers.length ? Math.min(...tiers.map(t=>t.min)) : 100;
+  scoreBonusSaveRules([...tiers,{min:Math.max(0,low - 5),points:1}]);
+}
+function scoreBonusRemoveTier(i){
+  const tiers = scoreBonusRules().tiers.slice().sort((a,b)=>b.min-a.min);
+  tiers.splice(i,1);
+  scoreBonusSaveRules(tiers);
+}
+
+/* 實際加減點數：和其他地方一樣寫 state.points＋pointLogs，最後只存一次 */
+function scoreBonusApply(exam,items){
+  const at = localIsoLikeString();
+  items.forEach(({studentId,points,score,reason})=>{
+    state.points[studentId] = (Number(state.points[studentId]) || 0) + points;
+    state.pointLogs.push({id:makeId(), studentId, classId:scoreContext.classId, schoolId:scoreContext.schoolId,
+      amount:points, points, reason, date:at, source:"score_bonus"});
+    state.scoreBonusAwards.push({id:makeId(), examId:exam.id, classId:scoreContext.classId, studentId, points, score, basis:scoreBonusRules().basis, at});
+    try{ recordActivity("points",`${findById(state.students,studentId)?.name || "學生"} ${scoreSigned(points)}｜${reason}`,{studentId,amount:points,reason,source:"score_bonus"}); }catch(e){}
+  });
+  try{ saveState(); }catch(e){ console.warn(e); }
+  try{ markDirty(`考試成績發點數：${exam.name}`); }catch(e){}
+}
+function scoreBonusAward(examId){
+  scoreSaveNow();
+  const exam = findById(state.scoreExams,examId);
+  if(!exam) return;
+  if(!state.points || typeof state.points !== "object") state.points = {};
+  state.pointLogs = ensureArray(state.pointLogs);
+  const plan = scoreBonusPlan(exam,scoreExamRows(exam)).filter(p=>p.diff);
+  if(!plan.length) return alert("這次考試已經發完點數了。");
+  const basis = scoreBonusBasisLabel(scoreBonusRules().basis);
+  const lines = plan.map(p=>`${p.row.student.name}　${basis} ${scoreText(scoreBonusScore(p.row))}　${scoreSigned(p.diff)} 點${p.given ? `（已發 ${scoreSigned(p.given)}，${p.diff > 0 ? "補發" : "扣回"}差額）` : ""}`);
+  const sum = plan.reduce((a,p)=>a + p.diff,0);
+  if(!confirm(`${exam.name}｜${className(scoreContext.classId)}\n要發點數給下面 ${plan.length} 位學生（共 ${scoreSigned(sum)} 點）：\n\n${lines.join("\n")}\n\n確定發點數？`)) return;
+  scoreBonusApply(exam,plan.map(p=>{
+    const score = scoreBonusScore(p.row);
+    const kind = !p.given ? "" : p.diff > 0 ? "補發" : "扣回";
+    return {studentId:p.row.student.id, points:p.diff, score, reason:`考試成績：${exam.name} ${basis} ${scoreText(score)} 分 ${kind}${scoreSigned(p.diff)}`};
+  }));
+  render();
+  flashSaved(`✓ 已發點數給 ${plan.length} 位學生`);
+}
+function scoreBonusRevoke(examId){
+  const exam = findById(state.scoreExams,examId);
+  if(!exam) return;
+  const rows = studentsByClass(scoreContext.classId).map(s=>({studentId:s.id, name:s.name, given:scoreBonusGiven(examId,s.id)})).filter(x=>x.given);
+  if(!rows.length) return;
+  if(!confirm(`要收回「${exam.name}」發給 ${className(scoreContext.classId)} 的點數嗎？\n\n${rows.map(x=>`${x.name}　${scoreSigned(-x.given)} 點`).join("\n")}`)) return;
+  scoreBonusApply(exam,rows.map(x=>({studentId:x.studentId, points:-x.given, score:null, reason:`收回考試成績點數：${exam.name} ${scoreSigned(-x.given)}`})));
+  render();
+  flashSaved("✓ 已收回這次考試的點數");
+}
+
 function scoreStatsHtml(rows){
-  return `<b>紙筆測驗</b>：${scoreStatsText(rows,"written")}<br><b>排笛術科</b>：${scoreStatsText(rows,"practical")}<br><b>總分</b>：${scoreStatsText(rows,"total")}`;
+  return `<b>紙筆測驗</b>：${scoreStatsText(rows,"written")}<br><b>${scoreSecondLabel()}</b>：${scoreStatsText(rows,"practical")}<br><b>總分</b>：${scoreStatsText(rows,"total")}`;
 }
 
 function scoreSortSelect(){
-  const options = [["seat","座號"],["written","紙筆名次"],["practical","術科名次"],["total","總名次"]];
+  const options = [["seat","座號"],["written","紙筆名次"],["practical",scoreSecondShort()+"名次"],["total","總名次"]];
   return `<select onchange="scoreChangeContext('sort',this.value)">
     ${options.map(([id,label])=>`<option value="${id}" ${scoreContext.sort===id?"selected":""}>${label}</option>`).join("")}
   </select>`;
@@ -11572,7 +11762,7 @@ function renderScoreExamCard(exam){
   const rows = scoreExamRows(exam);
   const w = scoreWeight(exam);
   const input = (r,field)=>`<input class="score-input" type="text" inputmode="decimal" autocomplete="off"
-    aria-label="${escapeHtml(r.student.name)} ${SCORE_FIELDS[field]}"
+    aria-label="${escapeHtml(r.student.name)} ${scoreFieldLabel(field)}"
     data-exam="${exam.id}" data-student="${r.student.id}" data-field="${field}" value="${r[field] ?? ""}"
     onfocus="scoreInputFocus(this)" oninput="scoreInput(this)" onblur="scoreInputBlur(this)" onkeydown="scoreInputKey(event,this)">`;
 
@@ -11581,6 +11771,8 @@ function renderScoreExamCard(exam){
       <div class="score-fields">
         <div><label>考試名稱</label><input value="${escapeHtml(exam.name)}" onchange="scoreRenameExam('${exam.id}',this.value)"></div>
         <div><label>紙筆占總分 %</label><input inputmode="decimal" value="${w}" onchange="scoreSetWeight('${exam.id}',this.value)"></div>
+        <div><label>第二項（這個課程單位）</label>
+          <select onchange="scoreSetSecondKind(this.value)">${Object.entries(SCORE_SECOND_KINDS).map(([id,label])=>`<option value="${id}" ${scoreSecondKind()===id?"selected":""}>${label}</option>`).join("")}</select></div>
         <div><label>排序方式</label>${scoreSortSelect()}</div>
         <div class="score-actions">
           <button class="btn" ${idx<=0?"disabled":""} onclick="scoreMoveExam('${exam.id}',-1)" aria-label="往前移">◀</button>
@@ -11588,11 +11780,12 @@ function renderScoreExamCard(exam){
           <button class="btn red" onclick="scoreDeleteExam('${exam.id}')">刪除這次考試</button>
         </div>
       </div>
-      <div class="small-muted" style="margin:10px 0">總分＝紙筆 ${w}%＋術科 ${scoreRound(100-w)}%。分數會自動儲存；沒填的不列入排名，同分同名次。</div>
+      <div class="small-muted" style="margin:10px 0">總分＝紙筆 ${w}%＋${scoreSecondShort()} ${scoreRound(100-w)}%。分數會自動儲存；沒填的不列入排名，同分同名次。</div>
       <div class="score-message" id="scoreMessage" role="status"></div>
+      ${rows.length ? scoreBonusBarHtml(exam,rows) : ""}
       ${rows.length ? `
       <div class="score-scroll"><table class="score-table">
-        <thead><tr><th>座號</th><th>姓名</th><th>紙筆測驗</th><th>紙筆名次</th><th>排笛術科</th><th>術科名次</th><th>總分</th><th>總名次</th></tr></thead>
+        <thead><tr><th>座號</th><th>姓名</th><th>紙筆測驗</th><th>紙筆名次</th><th>${scoreSecondLabel()}</th><th>${scoreSecondShort()}名次</th><th>總分</th><th>總名次</th><th>發點數</th></tr></thead>
         <tbody>${scoreSorted(rows).map(r=>`<tr>
           <td>${escapeHtml(r.student.seat || "")}</td>
           <td class="score-name">${escapeHtml(r.student.name)}</td>
@@ -11602,6 +11795,7 @@ function renderScoreExamCard(exam){
           <td id="score_practical_${r.student.id}">${scoreRankText(r.practicalRank)}</td>
           <td id="score_sum_${r.student.id}"><b>${scoreText(r.total)}</b></td>
           <td id="score_total_${r.student.id}">${scoreRankText(r.totalRank)}</td>
+          <td id="score_bonus_${r.student.id}">${scoreBonusCell(exam,r)}</td>
         </tr>`).join("")}</tbody>
       </table></div>
       <div class="note" id="scoreStats">${scoreStatsHtml(rows)}</div>` : `<div class="note">這個課程單位目前沒有學生。</div>`}
@@ -11620,8 +11814,8 @@ function renderScoreSummaryCard(){
       <div class="small-muted" style="margin:10px 0">平均只算已經登記的成績。已開始登記的考試只要缺一次，該項就不列入名次。</div>
       <div class="score-scroll"><table class="score-table">
         <thead>
-          <tr><th rowspan="2">座號</th><th rowspan="2">姓名</th>${perExam.map(x=>`<th colspan="3">${escapeHtml(x.exam.name)}</th>`).join("")}<th colspan="2">紙筆</th><th colspan="2">術科</th><th colspan="2">總成績</th></tr>
-          <tr>${perExam.map(()=>`<th>紙筆</th><th>術科</th><th>總分</th>`).join("")}${"<th>平均</th><th>名次</th>".repeat(3)}</tr>
+          <tr><th rowspan="2">座號</th><th rowspan="2">姓名</th>${perExam.map(x=>`<th colspan="3">${escapeHtml(x.exam.name)}</th>`).join("")}<th colspan="2">紙筆</th><th colspan="2">${scoreSecondShort()}</th><th colspan="2">總成績</th></tr>
+          <tr>${perExam.map(()=>`<th>紙筆</th><th>${scoreSecondShort()}</th><th>總分</th>`).join("")}${"<th>平均</th><th>名次</th>".repeat(3)}</tr>
         </thead>
         <tbody>${scoreSorted(rows).map(r=>`<tr>
           <td>${escapeHtml(r.student.seat || "")}</td>
@@ -11635,6 +11829,9 @@ function renderScoreSummaryCard(){
 
 function renderScores(){
   scoreEnsure();
+  const keepOpen = scoreKeepRulesOpen || !!document.querySelector(".score-bonus-rules[open]");
+  scoreKeepRulesOpen = false;
+  setTimeout(()=>{ if(keepOpen) document.querySelector(".score-bonus-rules")?.setAttribute("open",""); },0);
   const exams = scoreExamList();
   const exam = findById(exams,scoreContext.examId);
   const canAdd = !!scoreContext.schoolId;
