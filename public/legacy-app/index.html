@@ -11590,19 +11590,25 @@ function scoreRefreshComputed(){
 
 /* =========================================================
    依成績發點數
-   - 規則：分數達到某個門檻就加幾點，取符合的最高一級（不累加）
+   - 規則：依分數（達到門檻）或依排名（第幾～幾名，同分同名次）加幾點，取符合的最高一級（不累加）
    - 每位學生「這次考試」應得點數 − 已發點數 = 這次要發的；
      已發完的不會再發，之後改了成績或規則只補（或扣回）差額
    ========================================================= */
 const SCORE_BONUS_BASIS = {total:"總分", written:"紙筆測驗", practical:"第二項"};
+const SCORE_BONUS_MODES = {score:"依分數", rank:"依排名"};
 function scoreBonusRules(){
   const r = state.scoreBonusRules && typeof state.scoreBonusRules === "object" ? state.scoreBonusRules : {};
   const tiers = ensureArray(r.tiers)
     .map(t=>({min:Number(t.min), points:Number(t.points)}))
     .filter(t=>Number.isFinite(t.min) && Number.isFinite(t.points));
+  const rankTiers = ensureArray(r.rankTiers)
+    .map(t=>({from:Number(t.from), to:Number(t.to), points:Number(t.points)}))
+    .filter(t=>Number.isInteger(t.from) && Number.isInteger(t.to) && t.from >= 1 && t.to >= t.from && Number.isFinite(t.points));
   return {
+    mode:SCORE_BONUS_MODES[r.mode] ? r.mode : "score",
     basis:SCORE_BONUS_BASIS[r.basis] ? r.basis : "total",
-    tiers:Array.isArray(r.tiers) ? tiers : [{min:100,points:5},{min:95,points:3}]
+    tiers:Array.isArray(r.tiers) ? tiers : [{min:100,points:5},{min:95,points:3}],
+    rankTiers:Array.isArray(r.rankTiers) ? rankTiers : [{from:1,to:5,points:5}]
   };
 }
 function scoreBonusBasisLabel(basis){ return basis === "practical" ? scoreSecondLabel() : SCORE_BONUS_BASIS[basis]; }
@@ -11610,12 +11616,27 @@ function scoreBonusScore(row){
   const basis = scoreBonusRules().basis;
   return basis === "written" ? row.written : basis === "practical" ? row.practical : row.total;
 }
+function scoreBonusRank(row){ return row[scoreBonusRules().basis + "Rank"] ?? null; }
 function scoreBonusTarget(row){
+  const rules = scoreBonusRules();
+  if(rules.mode === "rank"){
+    const rank = scoreBonusRank(row);
+    if(rank === null) return 0;
+    const hits = rules.rankTiers.filter(t=>rank >= t.from && rank <= t.to);
+    return hits.length ? Math.max(...hits.map(t=>t.points)) : 0;
+  }
   const score = scoreBonusScore(row);
   if(score === null) return 0;
-  const hit = scoreBonusRules().tiers.filter(t=>score >= t.min).sort((a,b)=>b.min-a.min)[0];
+  const hit = rules.tiers.filter(t=>score >= t.min).sort((a,b)=>b.min-a.min)[0];
   return hit ? hit.points : 0;
 }
+/* 給確認視窗和點數紀錄用：「總分 100 分」或「總分第 3 名」 */
+function scoreBonusWhy(row){
+  const rules = scoreBonusRules(), label = scoreBonusBasisLabel(rules.basis);
+  if(rules.mode === "rank"){ const rank = scoreBonusRank(row); return rank === null ? `${label} 未登記` : `${label}第 ${rank} 名`; }
+  return `${label} ${scoreText(scoreBonusScore(row))} 分`;
+}
+function scoreRankRangeText(t){ return t.from === t.to ? `第 ${t.from} 名` : `第 ${t.from}～${t.to} 名`; }
 function scoreBonusGiven(examId,studentId){
   return ensureArray(state.scoreBonusAwards)
     .filter(a=>a.examId===examId && a.classId===scoreContext.classId && a.studentId===studentId)
@@ -11639,14 +11660,15 @@ function scoreBonusBarHtml(exam,rows){
   const plan = scoreBonusPlan(exam,rows);
   const todo = plan.filter(p=>p.diff);
   const given = plan.filter(p=>p.given);
+  const rank = scoreBonusRules().mode === "rank";
   const last = ensureArray(state.scoreBonusAwards).filter(a=>a.examId===exam.id && a.classId===scoreContext.classId).map(a=>a.at).sort().at(-1);
   let status;
-  if(todo.length) status = `<span class="score-bonus-todo">${given.length ? "成績或規則有變動，" : ""}${todo.length} 位學生待發點數</span>`;
+  if(todo.length) status = `<span class="score-bonus-todo">${given.length ? (rank ? "成績、名次或規則有變動，" : "成績或規則有變動，") : ""}${todo.length} 位學生待發點數</span>`;
   else if(given.length) status = `<span class="score-bonus-done">✅ 這次考試已發完點數${last ? `（${escapeHtml(safeFormatDateTime(last))}）` : ""}</span>`;
-  else status = `<span class="small-muted">目前沒有學生達到發點數的分數</span>`;
+  else status = `<span class="small-muted">${rank ? "目前沒有學生達到發點數的名次" : "目前沒有學生達到發點數的分數"}</span>`;
   return `<div class="score-bonus-bar" id="scoreBonusBar">
     <div class="score-actions">
-      <button class="btn gold" ${todo.length ? "" : "disabled"} onclick="scoreBonusAward('${exam.id}')">🎁 依成績發點數</button>
+      <button class="btn gold" ${todo.length ? "" : "disabled"} onclick="scoreBonusAward('${exam.id}')">🎁 ${rank ? "依排名發點數" : "依成績發點數"}</button>
       ${status}
       ${given.length ? `<button class="btn" onclick="scoreBonusRevoke('${exam.id}')">收回這次的點數</button>` : ""}
     </div>
@@ -11655,50 +11677,92 @@ function scoreBonusBarHtml(exam,rows){
 }
 function scoreBonusRulesHtml(){
   const rules = scoreBonusRules();
+  const rank = rules.mode === "rank";
   const tiers = rules.tiers.slice().sort((a,b)=>b.min-a.min);
-  return `<details class="score-bonus-rules">
-    <summary>發點數規則：依${escapeHtml(scoreBonusBasisLabel(rules.basis))}，${tiers.length ? tiers.map(t=>`${t.min} 分以上 ${scoreSigned(t.points)} 點`).join("、") : "尚未設定"}（取最高一級，不累加）</summary>
-    <div class="score-bonus-rule-row">
-      <label>依據</label>
-      <select onchange="scoreBonusSetBasis(this.value)">${Object.keys(SCORE_BONUS_BASIS).map(k=>`<option value="${k}" ${rules.basis===k?"selected":""}>${escapeHtml(scoreBonusBasisLabel(k))}</option>`).join("")}</select>
-    </div>
-    ${tiers.map((t,i)=>`<div class="score-bonus-rule-row">
+  const rankTiers = rules.rankTiers.slice().sort((a,b)=>a.from-b.from);
+  const list = rank
+    ? (rankTiers.length ? rankTiers.map(t=>`${scoreRankRangeText(t)} ${scoreSigned(t.points)} 點`).join("、") : "尚未設定")
+    : (tiers.length ? tiers.map(t=>`${t.min} 分以上 ${scoreSigned(t.points)} 點`).join("、") : "尚未設定");
+  const rows = rank
+    ? rankTiers.map((t,i)=>`<div class="score-bonus-rule-row">
+      <span>第</span><input inputmode="numeric" aria-label="從第幾名" value="${t.from}" onchange="scoreBonusSetRankTier(${i},'from',this.value)">
+      <span>～</span><input inputmode="numeric" aria-label="到第幾名" value="${t.to}" onchange="scoreBonusSetRankTier(${i},'to',this.value)"><span>名，加</span>
+      <input inputmode="numeric" aria-label="點數" value="${t.points}" onchange="scoreBonusSetRankTier(${i},'points',this.value)"><span>點</span>
+      <button class="btn red" onclick="scoreBonusRemoveRankTier(${i})" aria-label="刪除這一級">×</button>
+    </div>`).join("")
+    : tiers.map((t,i)=>`<div class="score-bonus-rule-row">
       <input inputmode="decimal" aria-label="門檻分數" value="${t.min}" onchange="scoreBonusSetTier(${i},'min',this.value)"><span>分以上，加</span>
       <input inputmode="numeric" aria-label="點數" value="${t.points}" onchange="scoreBonusSetTier(${i},'points',this.value)"><span>點</span>
       <button class="btn red" onclick="scoreBonusRemoveTier(${i})" aria-label="刪除這一級">×</button>
-    </div>`).join("")}
-    <button class="btn" onclick="scoreBonusAddTier()">＋ 新增一級</button>
-    <div class="small-muted">規則所有學校、班級共用。改了規則後，已發過點數的學生只會補發或扣回差額。</div>
+    </div>`).join("");
+  return `<details class="score-bonus-rules">
+    <summary>發點數規則：${rank ? "依" + escapeHtml(scoreBonusBasisLabel(rules.basis)) + "名次" : "依" + escapeHtml(scoreBonusBasisLabel(rules.basis))}，${list}（取最高一級，不累加）</summary>
+    <div class="score-bonus-rule-row">
+      <label>發點方式</label>
+      <select onchange="scoreBonusSetMode(this.value)">${Object.keys(SCORE_BONUS_MODES).map(k=>`<option value="${k}" ${rules.mode===k?"selected":""}>${SCORE_BONUS_MODES[k]}</option>`).join("")}</select>
+      <label>依據</label>
+      <select onchange="scoreBonusSetBasis(this.value)">${Object.keys(SCORE_BONUS_BASIS).map(k=>`<option value="${k}" ${rules.basis===k?"selected":""}>${escapeHtml(scoreBonusBasisLabel(k))}${rank ? "名次" : ""}</option>`).join("")}</select>
+    </div>
+    ${rows}
+    <button class="btn" onclick="${rank ? "scoreBonusAddRankTier()" : "scoreBonusAddTier()"}">＋ 新增一級</button>
+    <div class="small-muted">${rank ? "同分同名次，並列的學生拿一樣的點數（所以拿到的人數可能比名額多）。名次會隨登記的成績變動。" : ""}規則所有學校、班級共用。改了規則後，已發過點數的學生只會補發或扣回差額。</div>
   </details>`;
 }
-function scoreBonusSaveRules(tiers,basis){
+function scoreBonusSaveRules(patch){
   const rules = scoreBonusRules();
-  state.scoreBonusRules = {basis:basis || rules.basis, tiers:(tiers || rules.tiers).slice().sort((a,b)=>b.min-a.min)};
+  const next = {...rules, ...(patch || {})};
+  next.tiers = next.tiers.slice().sort((a,b)=>b.min-a.min);
+  next.rankTiers = next.rankTiers.slice().sort((a,b)=>a.from-b.from);
+  state.scoreBonusRules = next;
   scoreSaveNow();
   scoreKeepRulesOpen = true;
   render();
 }
 let scoreKeepRulesOpen = false;
-function scoreBonusSetBasis(basis){ if(SCORE_BONUS_BASIS[basis]) scoreBonusSaveRules(null,basis); }
+function scoreBonusSetMode(mode){ if(SCORE_BONUS_MODES[mode]) scoreBonusSaveRules({mode}); }
+function scoreBonusSetBasis(basis){ if(SCORE_BONUS_BASIS[basis]) scoreBonusSaveRules({basis}); }
 function scoreBonusSetTier(i,key,value){
   const tiers = scoreBonusRules().tiers.slice().sort((a,b)=>b.min-a.min);
   const n = key === "min" ? scoreParse(value) : Number(String(value).normalize("NFKC").trim());
   if(!tiers[i] || typeof n !== "number" || !Number.isFinite(n) || (key === "points" && !Number.isInteger(n))){
     alert(key === "min" ? "門檻請填 0～100 的分數。" : "點數請填整數。");
-    return scoreBonusSaveRules(tiers);
+    return scoreBonusSaveRules({tiers});
   }
   tiers[i] = {...tiers[i], [key]:n};
-  scoreBonusSaveRules(tiers);
+  scoreBonusSaveRules({tiers});
 }
 function scoreBonusAddTier(){
   const tiers = scoreBonusRules().tiers;
   const low = tiers.length ? Math.min(...tiers.map(t=>t.min)) : 100;
-  scoreBonusSaveRules([...tiers,{min:Math.max(0,low - 5),points:1}]);
+  scoreBonusSaveRules({tiers:[...tiers,{min:Math.max(0,low - 5),points:1}]});
 }
 function scoreBonusRemoveTier(i){
   const tiers = scoreBonusRules().tiers.slice().sort((a,b)=>b.min-a.min);
   tiers.splice(i,1);
-  scoreBonusSaveRules(tiers);
+  scoreBonusSaveRules({tiers});
+}
+function scoreBonusSetRankTier(i,key,value){
+  const rankTiers = scoreBonusRules().rankTiers.slice().sort((a,b)=>a.from-b.from);
+  const n = Number(String(value).normalize("NFKC").trim());
+  const bad = !rankTiers[i] || String(value).trim() === "" || !Number.isInteger(n) || (key !== "points" && n < 1);
+  if(bad){
+    alert(key === "points" ? "點數請填整數。" : "名次請填 1 以上的整數。");
+    return scoreBonusSaveRules({rankTiers});
+  }
+  const t = {...rankTiers[i], [key]:n};
+  if(t.to < t.from){ t.from = n; t.to = n; }
+  rankTiers[i] = t;
+  scoreBonusSaveRules({rankTiers});
+}
+function scoreBonusAddRankTier(){
+  const rankTiers = scoreBonusRules().rankTiers;
+  const next = rankTiers.length ? Math.max(...rankTiers.map(t=>t.to)) + 1 : 1;
+  scoreBonusSaveRules({rankTiers:[...rankTiers,{from:next,to:next,points:1}]});
+}
+function scoreBonusRemoveRankTier(i){
+  const rankTiers = scoreBonusRules().rankTiers.slice().sort((a,b)=>a.from-b.from);
+  rankTiers.splice(i,1);
+  scoreBonusSaveRules({rankTiers});
 }
 
 /* 實際加減點數：和其他地方一樣寫 state.points＋pointLogs，最後只存一次 */
@@ -11708,7 +11772,7 @@ function scoreBonusApply(exam,items){
     state.points[studentId] = (Number(state.points[studentId]) || 0) + points;
     state.pointLogs.push({id:makeId(), studentId, classId:scoreContext.classId, schoolId:scoreContext.schoolId,
       amount:points, points, reason, date:at, source:"score_bonus"});
-    state.scoreBonusAwards.push({id:makeId(), examId:exam.id, classId:scoreContext.classId, studentId, points, score, basis:scoreBonusRules().basis, at});
+    state.scoreBonusAwards.push({id:makeId(), examId:exam.id, classId:scoreContext.classId, studentId, points, score, basis:scoreBonusRules().basis, mode:scoreBonusRules().mode, at});
     try{ recordActivity("points",`${findById(state.students,studentId)?.name || "學生"} ${scoreSigned(points)}｜${reason}`,{studentId,amount:points,reason,source:"score_bonus"}); }catch(e){}
   });
   try{ saveState(); }catch(e){ console.warn(e); }
@@ -11722,14 +11786,13 @@ function scoreBonusAward(examId){
   state.pointLogs = ensureArray(state.pointLogs);
   const plan = scoreBonusPlan(exam,scoreExamRows(exam)).filter(p=>p.diff);
   if(!plan.length) return alert("這次考試已經發完點數了。");
-  const basis = scoreBonusBasisLabel(scoreBonusRules().basis);
-  const lines = plan.map(p=>`${p.row.student.name}　${basis} ${scoreText(scoreBonusScore(p.row))}　${scoreSigned(p.diff)} 點${p.given ? `（已發 ${scoreSigned(p.given)}，${p.diff > 0 ? "補發" : "扣回"}差額）` : ""}`);
+  const lines = plan.map(p=>`${p.row.student.name}　${scoreBonusWhy(p.row)}　${scoreSigned(p.diff)} 點${p.given ? `（已發 ${scoreSigned(p.given)}，${p.diff > 0 ? "補發" : "扣回"}差額）` : ""}`);
   const sum = plan.reduce((a,p)=>a + p.diff,0);
   if(!confirm(`${exam.name}｜${className(scoreContext.classId)}\n要發點數給下面 ${plan.length} 位學生（共 ${scoreSigned(sum)} 點）：\n\n${lines.join("\n")}\n\n確定發點數？`)) return;
   scoreBonusApply(exam,plan.map(p=>{
     const score = scoreBonusScore(p.row);
     const kind = !p.given ? "" : p.diff > 0 ? "補發" : "扣回";
-    return {studentId:p.row.student.id, points:p.diff, score, reason:`考試成績：${exam.name} ${basis} ${scoreText(score)} 分 ${kind}${scoreSigned(p.diff)}`};
+    return {studentId:p.row.student.id, points:p.diff, score, reason:`考試成績：${exam.name} ${scoreBonusWhy(p.row)} ${kind}${scoreSigned(p.diff)}`};
   }));
   render();
   flashSaved(`✓ 已發點數給 ${plan.length} 位學生`);
