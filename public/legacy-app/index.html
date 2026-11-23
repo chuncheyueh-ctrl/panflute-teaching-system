@@ -11218,8 +11218,8 @@ function renderClassroomNotes(note, previousNotes){
     .slice(0,6);
 
   document.getElementById("classroomBody").innerHTML = `
+    <div id="lessonSyncStatus" class="lesson-sync-status" role="status"></div>
     <div class="adventure-board">
-      <div id="lessonSyncStatus" class="lesson-sync-status" role="status"></div>
       <!-- 左上：本週主線 -->
       <section class="story-card lesson-core-card" id="lessonWeeklyPlanCard">
         <h3>📌 左上（本週主線）</h3>
@@ -30200,7 +30200,7 @@ ST160_StateGuard.install();
     const rec = byKey(currentKey());
     const list = rec ? SECTIONS.map(s=>meta(rec,s)) : [];
     const waiting = list.some(m=>m.pending && !m.hold);
-    let cls = 'ok', text = '🟢 課程紀錄已同步，其他裝置會自動看到';
+    let cls = 'ok', text = '🟢 已同步';
     if(list.some(m=>m.conflict)){ cls = 'warn'; text = '⚠️ 有一格出現兩個版本，請在那一格選擇要保留哪一個'; }
     else if(cloud.status === 'denied'){ cls = 'warn'; text = '🔴 雲端拒絕寫入課程紀錄（資料庫規則），目前只存在這台，請按「上傳雲端」備份'; }
     else if(list.some(m=>m.hold)){ cls = 'warn'; text = '🟡 還原的課程紀錄還沒上傳，確認後請按「上傳雲端」'; }
@@ -30383,8 +30383,8 @@ ST160_StateGuard.install();
 
   const css = `.v1537-prev-review{margin:0 0 14px;padding:12px 13px;border:1px dashed rgba(82,128,104,.30);border-radius:14px;background:rgba(255,255,255,.58)}.v1537-prev-review h4{margin:0 0 8px;font-size:15px;font-weight:950}.v1537-prev-date{font-size:12px;color:var(--muted);margin-bottom:6px}.v1537-review-section{margin-top:8px;line-height:1.55}
     body.dark-mode .v1537-prev-review{background:#302b1b}
-    .lesson-sync-status{grid-column:1/-1;font-weight:800;font-size:14px;padding:10px 14px;border-radius:14px;border:1px solid var(--line);background:var(--card);color:var(--text)}
-    .lesson-sync-status.warn{border-color:var(--red-dark)}
+    .lesson-sync-status{width:fit-content;max-width:100%;margin:6px 0 8px;font-weight:700;font-size:13px;line-height:1.4;color:var(--muted)}
+    .lesson-sync-status.warn{padding:5px 12px;border:1px solid var(--red-dark);border-radius:12px;color:var(--text)}
     .lesson-conflict{margin:0 0 14px;padding:12px;border:2px solid var(--red-dark);border-radius:14px}
     .lesson-conflict-text{white-space:pre-wrap;max-height:200px;overflow:auto;margin:8px 0;padding:8px;border-radius:10px;background:rgba(127,127,127,.12)}`;
   const st = document.createElement('style');
