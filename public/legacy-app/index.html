@@ -6442,6 +6442,33 @@ window.BTMainStore = BTMainStore;
 <script type="text/bt-app">
 window.addEventListener('unhandledrejection', function(e){ console.error(e.reason); });
 
+/* 同一輪畫面裡重複查詢用的索引：
+   畫畫面時常會「每位學生都把全部紀錄掃一遍」，資料多時在 iPad 上很慢。
+   第一次查詢時把清單依 key 分組，同一個同步工作內重複使用，這輪結束（microtask）就丟掉；
+   清單換掉或筆數改變也會重建。分組裡放的是原本的紀錄物件，修改內容會直接反映。 */
+const btScopedIndexCache = {};
+function btScopedIndex(list, tag, keyFn){
+  list = Array.isArray(list) ? list : [];
+  const c = btScopedIndexCache[tag];
+  if(c && c.list === list && c.len === list.length) return c.map;
+  const map = new Map();
+  for(const item of list){
+    const k = keyFn(item);
+    if(k === undefined) continue;
+    let arr = map.get(k);
+    if(!arr) map.set(k, arr = []);
+    arr.push(item);
+  }
+  btScopedIndexCache[tag] = {list, len:list.length, map};
+  queueMicrotask(()=>{ delete btScopedIndexCache[tag]; });
+  return map;
+}
+function btAttendanceKey(studentId, classId, date){ return studentId + "\u0001" + classId + "\u0001" + date; }
+function btAttendanceRecord(studentId, classId, date){
+  const bucket = btScopedIndex(state.attendance, "attendance", a=>a ? btAttendanceKey(a.studentId,a.classId,a.date) : undefined).get(btAttendanceKey(studentId,classId,date));
+  return bucket ? (bucket.find(a=>a.studentId === studentId && a.classId === classId && a.date === date) || null) : null;
+}
+
 /* 成功訊息用不擋畫面的小提示，幾秒後自動消失；點一下也可以關掉。
    錯誤、警告、需要使用者讀完的說明仍然用 alert。 */
 function showToast(msg, ms){
@@ -6758,7 +6785,19 @@ function saveState(){
   try{ window.LessonSync?.captureAll(); }catch(e){ console.warn(e); }
   persistMain();
 }
+/* 存檔合併：一次點擊常會連續呼叫好幾次存檔（saveState、markDirty…），
+   每次都要把整份資料轉成文字，資料多時在 iPad 上很慢。
+   IndexedDB 模式改成 300ms 內合併成一次，而且等畫面先更新完才存。
+   離開或切到背景時 BTMainStore.flush() 會立刻存當下資料，不會漏。
+   localStorage 模式維持立刻存（空間不足時外層要能接到錯誤）。 */
+let persistMainTimer = null;
 function persistMain(){
+  if(BTMainStore.mode !== "idb"){ persistMainNow(); return; }
+  if(persistMainTimer) return;
+  persistMainTimer = setTimeout(persistMainNow, 300);
+}
+function persistMainNow(){
+  if(persistMainTimer){ clearTimeout(persistMainTimer); persistMainTimer = null; }
   BTMainStore.save(JSON.stringify(state)).catch(()=>{}); /* 失敗時 BTMainStore 會提示 */
 }
 
@@ -8140,7 +8179,7 @@ function setAttendance(studentId,classId,date,status){
 }
 
 function attendanceStatus(studentId,classId,date){
-  return state.attendance.find(a => a.studentId === studentId && a.classId === classId && a.date === date)?.status || "";
+  return btAttendanceRecord(studentId,classId,date)?.status || "";
 }
 
 function saveCourseNote(classId,date,content,termId=classContext.termId){
@@ -8481,16 +8520,21 @@ function growthTypeById(id){
   return allGrowthTypes().find(t=>t.id===id) || growthTypes()[0] || {id:"attitude",name:"學習態度",defaultXp:10,defaultFeedback:"今天有明顯進步。"};
 }
 
+/* 畫一次畫面時每位學生都要找自己的成長紀錄好幾次，用 btScopedIndex 分好組 */
+function growthLogsOf(studentId){
+  return btScopedIndex(state.growthLogs, "growthLogs", log=>log?.studentId).get(studentId) || [];
+}
+
 function growthLogsForStudent(studentId,limit=3){
-  return (state.growthLogs || []).filter(log => log.studentId === studentId).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,limit);
+  return growthLogsOf(studentId).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,limit);
 }
 
 function allGrowthLogsForStudent(studentId){
-  return (state.growthLogs || []).filter(log => log.studentId === studentId).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  return growthLogsOf(studentId).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
 }
 
 function growthXpTotal(studentId){
-  return (state.growthLogs || []).filter(log => log.studentId === studentId).reduce((sum,log)=>sum + (Number(log.xp)||0),0);
+  return growthLogsOf(studentId).reduce((sum,log)=>sum + (Number(log.xp)||0),0);
 }
 
 function growthLevelInfo(xp){
@@ -10584,7 +10628,7 @@ function giColor(id){ return giType(id)?.color || "#7fc8a9"; }
 function giName(id){ return giType(id)?.name || growthTypeName(id); }
 function giSetQuick(studentId,typeId){ const t=giType(typeId); const typeEl=document.getElementById(`growthType_${studentId}`); const xpEl=document.getElementById(`growthXp_${studentId}`); if(typeEl) typeEl.value=t.id; if(xpEl) xpEl.value=Number(t.defaultXp||0); }
 function giRenderButtons(studentId){ giEnsureSettings(); return growthTypes().map(t=>`<button class="gi-type-btn" style="background:${giColor(t.id)}" onclick="giSetQuick('${studentId}','${t.id}')">${escapeHtml(t.name)} ${Number(t.defaultXp)>=0?'+':''}${Number(t.defaultXp||0)}</button>`).join(""); }
-function giDistribution(studentId){ const map=new Map(); let total=0; (state.growthLogs||[]).filter(log=>log.studentId===studentId).forEach(log=>{ const xp=Math.max(0,Number(log.xp)||0); if(!xp) return; const id=log.type||"unknown"; const item=map.get(id)||{id,name:giName(id),color:giColor(id),xp:0}; item.xp+=xp; total+=xp; map.set(id,item); }); return {items:[...map.values()].sort((a,b)=>b.xp-a.xp),total}; }
+function giDistribution(studentId){ const map=new Map(); let total=0; growthLogsOf(studentId).forEach(log=>{ const xp=Math.max(0,Number(log.xp)||0); if(!xp) return; const id=log.type||"unknown"; const item=map.get(id)||{id,name:giName(id),color:giColor(id),xp:0}; item.xp+=xp; total+=xp; map.set(id,item); }); return {items:[...map.values()].sort((a,b)=>b.xp-a.xp),total}; }
 function giRenderInsight(studentId){ const {items,total}=giDistribution(studentId); if(!total) return `<div class="gi-box"><div class="gi-title">📊 能力洞察分析</div><div class="small-muted">尚無足夠資料。新增成長日誌後會自動顯示彩色能力比例。</div></div>`; const top=items.slice(0,2).map(x=>x.name).join("、"); return `<div class="gi-box"><div class="gi-title">📊 能力洞察分析：目前強項偏向 ${escapeHtml(top)}</div><div class="gi-bar">${items.map(x=>`<div class="gi-seg" style="width:${Math.max(3,x.xp/total*100)}%;background:${x.color}" title="${escapeHtml(x.name)} ${x.xp}XP"></div>`).join("")}</div><div class="gi-legend">${items.map(x=>`<span class="gi-chip" style="background:${x.color}">${escapeHtml(x.name)} ${x.xp}XP｜${Math.round(x.xp/total*100)}%</span>`).join("")}</div></div>`; }
 function giUpdateType(id,field,value){ giEnsureSettings(); const t=(state.growthSettings.growthTypes||[]).find(x=>x.id===id); if(!t) return; t[field]= field==="defaultXp"||field==="order" ? Number(value||0) : value; saveState(); markDirty?.("修改成長類型"); }
 function giAddType(){ giEnsureSettings(); state.growthSettings.growthTypes.push({id:"gt_"+Date.now(),name:"新類型",defaultXp:10,color:"#7fc8a9",active:true,order:state.growthSettings.growthTypes.length+1}); saveState(); markDirty?.("新增成長類型"); render(); }
@@ -10742,11 +10786,18 @@ function renderClassroomRollcall(students){
     return;
   }
 
+  /* 先建好今天的出席表，不用每位學生都從頭找一遍 */
+  const todayStatus = new Map();
+  for(const a of state.attendance){
+    if(a.classId === classContext.classId && a.date === classContext.date && !todayStatus.has(a.studentId)) todayStatus.set(a.studentId, a.status || "");
+  }
   container.innerHTML = `
     <section id="studentCards">
       ${students.map(student => {
-        const status = attendanceStatus(student.id,classContext.classId,classContext.date);
+        const status = todayStatus.get(student.id) || "";
         const point = Number(state.points[student.id] || 0);
+        const xpTotal = growthXpTotal(student.id);
+        const lv = growthLevelInfo(xpTotal);
         return `
           <article class="card student-card">
             <div class="student-head">
@@ -10777,13 +10828,13 @@ function renderClassroomRollcall(students){
             </div>
 
             <details class="growth-box">
-              <summary>🌱 成長日誌｜${growthLevelInfo(growthXpTotal(student.id)).current.title}｜累積 ${growthXpTotal(student.id)} XP</summary>
+              <summary>🌱 成長日誌｜${lv.current.title}｜累積 ${xpTotal} XP</summary>
               <div class="note">
-                冒險等級：LV${growthLevelInfo(growthXpTotal(student.id)).current.level}　
-                ${growthLevelInfo(growthXpTotal(student.id)).next ? `距離 LV${growthLevelInfo(growthXpTotal(student.id)).next.level} 還需要 ${Number(growthLevelInfo(growthXpTotal(student.id)).next.xp)-growthXpTotal(student.id)} XP` : "已達目前最高冒險等級"}
+                冒險等級：LV${lv.current.level}　
+                ${lv.next ? `距離 LV${lv.next.level} 還需要 ${Number(lv.next.xp)-xpTotal} XP` : "已達目前最高冒險等級"}
               </div>
               ${giRenderInsight(student.id)}
-              <div class="growth-progress"><span style="width:${growthLevelInfo(growthXpTotal(student.id)).progress}%"></span></div>
+              <div class="growth-progress"><span style="width:${lv.progress}%"></span></div>
               <div class="growth-quick">
                 ${giRenderButtons(student.id)}
               </div>
@@ -29461,7 +29512,7 @@ ST160_StateGuard.install();
   }
   function recordFor(studentId, classId=curClassId(), date=curDate()){
     ensureAttendanceArray();
-    try{ return state.attendance.find(a => a && a.studentId === studentId && a.classId === classId && a.date === date) || null; }
+    try{ return btAttendanceRecord(studentId, classId, date); }
     catch(e){ return null; }
   }
   function coreStatus(studentId, classId=curClassId(), date=curDate()){
@@ -29963,7 +30014,7 @@ ST160_StateGuard.install();
     const key=String(nameOrId??'').trim();
     return students().find(s=>s&&(String(s.id)===key||String(s.name)===key||String(s.name||'').includes(key)))||null;
   }
-  function logsFor(studentId){return arr(window.state?.growthLogs).filter(l=>l&&String(l.studentId)===String(studentId));}
+  function logsFor(studentId){return (btScopedIndex(window.state?.growthLogs, "growthLogsStr", l=>l ? String(l.studentId) : undefined).get(String(studentId)) || []).slice();}
   function logAbilityId(log){
     const fields=[log.magicAbility,log.magicType,log.ability,log.abilityType,log.type,log.category,log.cat,log.typeId,log.label,log.name,log.feedback,log.text,log.remark,log.source].filter(Boolean);
     for(const f of fields){ const id=normalize(f); if(id) return id; }
