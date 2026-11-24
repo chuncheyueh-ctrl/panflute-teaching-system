@@ -854,6 +854,15 @@ input[type="date"]{
 .sync-status{position:fixed;right:18px;top:18px;z-index:9999;padding:10px 14px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid var(--line);box-shadow:0 8px 24px rgba(0,0,0,.10);font-weight:900;font-size:13px;display:flex;gap:8px;align-items:center}
 .sync-status.clean{color:#2f7d4d}.sync-status.dirty{color:#9a6b00}.sync-status.syncing{color:#2d65b0}.sync-status.error{color:#b84c44}
 .sync-status button{width:auto;padding:5px 9px;border-radius:999px;font-size:12px}
+.sync-status .sync-pending{font-size:12px;font-weight:800;opacity:.9}
+.sync-status.dirty .sync-actions button:first-child{background:#f3c64b;color:#4a3500;border-color:#d9a92a}
+.sync-status.urgent{background:#fff1c7;border-color:#e0a800;box-shadow:0 0 0 3px rgba(224,168,0,.25),0 8px 24px rgba(0,0,0,.12)}
+.upload-reminder{position:fixed;right:18px;top:76px;z-index:9999;max-width:360px;padding:12px 14px;border-radius:18px;background:#fffaf0;border:2px solid #e0a800;box-shadow:0 10px 28px rgba(0,0,0,.16);font-weight:800;font-size:14px;color:#5a4300;line-height:1.5}
+.upload-reminder-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
+.upload-reminder-actions .btn{width:auto;padding:6px 12px;font-size:13px}
+body.dark-mode .upload-reminder{background:#3a3220;color:#f6e3a8;border-color:#b8902a}
+body.dark-mode .sync-status.urgent{background:#4a3c1a;color:#ffd970}
+@media(max-width:720px){.upload-reminder{left:12px;right:12px;top:auto;bottom:76px;max-width:none}}
 @media(max-width:720px){.sync-status{left:12px;right:12px;top:auto;bottom:12px;justify-content:center}}
 
 
@@ -951,6 +960,26 @@ input[type="date"]{
 .score-bonus-rule-row input{width:84px !important;text-align:center}
 .score-bonus-rule-row select{width:auto !important}
 .score-bonus-rules .btn{width:auto;min-height:40px;padding:6px 12px}
+.score-table select.score-mark{width:auto !important;min-height:40px;padding:4px 8px;font-weight:800}
+.score-table select.score-mark-absent{color:var(--red-dark);border-color:var(--red-dark)}
+.score-table select.score-mark-makeup{color:#2d65b0;border-color:#2d65b0}
+.score-table input.score-input:disabled{opacity:.55}
+.score-progress{margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:14px}
+.score-progress summary{cursor:pointer;font-weight:800;min-height:32px;padding:4px 0}
+.score-print-title{display:none}
+@media print{
+  body.score-printing *{visibility:hidden !important}
+  body.score-printing .score-print-area,body.score-printing .score-print-area *{visibility:visible !important}
+  body.score-printing .score-print-area{position:absolute;left:0;top:0;width:100%;box-shadow:none !important;border:none !important;background:#fff !important;color:#000 !important}
+  body.score-printing .score-print-area .score-fields,body.score-printing .score-print-area .score-output,
+  body.score-printing .score-print-area .score-bonus-bar,body.score-printing .score-print-area .score-message,
+  body.score-printing .score-print-area .score-progress:not([open]),body.score-printing .score-print-area>.small-muted{display:none !important}
+  body.score-printing .score-print-title{display:block !important;font-size:18px;font-weight:900;margin-bottom:10px}
+  body.score-printing .score-scroll{overflow:visible !important}
+  body.score-printing .score-table th,body.score-printing .score-table td{padding:4px 6px;color:#000 !important;border-bottom:1px solid #999}
+  body.score-printing .score-table .score-name{position:static;background:none !important}
+  body.score-printing .score-table input.score-input,body.score-printing .score-table select.score-mark{border:none !important;background:none !important;box-shadow:none !important;min-height:0;padding:0;font-size:14px !important;-webkit-appearance:none;appearance:none;color:#000 !important}
+}
 
 /* =========================================================
    DARK MODE
@@ -6729,6 +6758,7 @@ async function firebaseUploadAll(silent=false, force=false) {
       deviceName: (typeof getDeviceName === "function" ? getDeviceName() : ""),
       state: JSON.parse(JSON.stringify(state))
     };
+    clearPendingSyncInfo(payload.state.backupMeta);
 
     await firebaseDb.ref("battleSystem/main").set(payload);
     state.backupMeta.cloudBaseMs = payload.updatedAt;
@@ -6908,6 +6938,8 @@ async function firebaseDownloadAll() {
     state.backupMeta.lastLocalChangeMs = Number(data.updatedAt || Date.now());
     state.backupMeta.cloudBaseMs = Number(data.updatedAt || 0);
     hideCloudWarning();
+    clearPendingSyncInfo(state.backupMeta);
+    hideUploadReminder();
 
     syncStatus.syncing = false;
     syncStatus.dirty = false;
@@ -7097,6 +7129,18 @@ let syncStatus = {
   localUpdatedAt:state.backupMeta?.lastLocalChangeMs || state.backupMeta?.lastFirebaseUploadMs || 0,
   lastFirebaseSyncAt:state.backupMeta?.lastFirebaseUploadAt || ""
 };
+/* 重新整理後還記得有沒有上傳過 */
+syncStatus.dirty = localHasUnsyncedChanges();
+if(syncStatus.dirty){
+  ensureBackupMeta();
+  if(!state.backupMeta.dirtySinceMs) state.backupMeta.dirtySinceMs = Number(state.backupMeta.lastLocalChangeMs) || Date.now();
+  setTimeout(()=>{
+    if(!syncStatus.dirty) return;
+    const last = state.backupMeta?.lastLocalChangeAt;
+    showUploadReminder(`這台裝置還有修改沒上傳雲端${last ? `（最後修改：${safeFormatDateTime(last)}）` : ""}。確認資料沒問題後，記得上傳。`);
+  }, 2500);
+}
+setInterval(()=>{ if(syncStatus.dirty && !syncStatus.syncing && !syncStatus.checking) renderSyncStatus(); }, 60000);
 
 
 /* =========================================================
@@ -7139,8 +7183,68 @@ function ensureBackupMeta(){
   if(!state.backupMeta) state.backupMeta = {};
 }
 
+/* =========================================================
+   2026-11-24 上傳提醒
+   - 重新整理後仍記得「尚未上傳」（以前一重整就顯示已同步）
+   - 記錄從什麼時候開始沒上傳、包含哪些重要修改，顯示在同步列
+   - 重要的動作（例如考試發點數）做完會跳出「現在上傳」提醒
+   ========================================================= */
+const SYNC_IMPORTANT_RULES = [
+  [/^考試成績發點數/, "考試發點數"],
+  [/^考試成績$/, "考試成績"],
+  [/獎品兌換/, "獎品兌換"],
+  [/XP|點數/, "點數"],
+  [/^出席/, "出席"]
+];
+function localHasUnsyncedChanges(){
+  const m = state.backupMeta || {};
+  return Number(m.lastLocalChangeMs || 0) > Math.max(Number(m.lastFirebaseUploadMs || 0), Number(m.lastFirebaseDownloadMs || 0));
+}
+function clearPendingSyncInfo(meta){
+  if(!meta) return;
+  delete meta.dirtySinceMs;
+  delete meta.pendingImportant;
+}
+function syncPendingImportant(){
+  return syncStatus.dirty ? ensureArray(state.backupMeta?.pendingImportant).filter(x=>typeof x === "string") : [];
+}
+function syncDirtyMinutes(){
+  const since = Number(state.backupMeta?.dirtySinceMs || 0);
+  return syncStatus.dirty && since ? Math.max(0, Math.floor((Date.now() - since) / 60000)) : 0;
+}
+function syncDurationText(mins){
+  if(mins < 60) return `${mins} 分鐘`;
+  if(mins < 60 * 24) return `${Math.floor(mins / 60)} 小時`;
+  return `${Math.floor(mins / 60 / 24)} 天`;
+}
+function showUploadReminder(message){
+  let box = document.getElementById("uploadReminderBox");
+  if(!box){
+    box = document.createElement("div");
+    box.id = "uploadReminderBox";
+    box.className = "upload-reminder";
+    document.body.appendChild(box);
+  }
+  box.innerHTML = `<div>☁️ ${escapeHtml(message)}</div>
+    <div class="upload-reminder-actions">
+      <button class="btn gold" onclick="hideUploadReminder();guardedFirebaseUpload()">⬆️ 現在上傳</button>
+      <button class="btn" onclick="hideUploadReminder()">稍後</button>
+    </div>`;
+}
+function hideUploadReminder(){ document.getElementById("uploadReminderBox")?.remove(); }
+
 function markDirty(reason="資料異動"){
   ensureBackupMeta();
+  const meta = state.backupMeta;
+  if(!syncStatus.dirty || !meta.dirtySinceMs){
+    if(!syncStatus.dirty) meta.pendingImportant = [];
+    meta.dirtySinceMs = Date.now();
+  }
+  const important = SYNC_IMPORTANT_RULES.find(([re])=>re.test(String(reason || "")))?.[1];
+  if(important){
+    meta.pendingImportant = ensureArray(meta.pendingImportant);
+    if(!meta.pendingImportant.includes(important)) meta.pendingImportant.push(important);
+  }
   syncStatus.dirty = true;
   syncStatus.lastError = "";
   state.backupMeta.lastLocalChangeAt = localIsoLikeString();
@@ -7154,6 +7258,8 @@ function markDirty(reason="資料異動"){
 function markClean(){
   ensureBackupMeta();
   syncStatus.dirty = false;
+  clearPendingSyncInfo(state.backupMeta);
+  hideUploadReminder();
   syncStatus.lastFirebaseSyncAt = localIsoLikeString();
   state.backupMeta.lastFirebaseUploadAt = syncStatus.lastFirebaseSyncAt;
   state.backupMeta.lastFirebaseUploadMs = Date.now();
@@ -7647,8 +7753,11 @@ function renderSyncStatus(){
     cls = "dirty";
     text = "⚠️ 雲端較新";
   }else if(syncStatus.dirty){
-    cls = "dirty";
-    text = "🟡 尚未上傳";
+    const mins = syncDirtyMinutes();
+    const pend = syncPendingImportant();
+    cls = "dirty" + (mins >= 30 || pend.includes("考試發點數") ? " urgent" : "");
+    text = "🟡 尚未上傳" + (mins >= 10 ? `（${syncDurationText(mins)}）` : "");
+    if(pend.length) text += `</span><span class="sync-pending">含：${escapeHtml(pend.join("、"))}`;
   }
 
   const last = syncStatus.lastFirebaseSyncAt || state.backupMeta?.lastFirebaseUploadAt || "尚未同步";
@@ -8889,13 +8998,29 @@ function checkScheduleAutoSelect(){
 }
 setInterval(checkScheduleAutoSelect, 10000);
 
-function startClassStudentPhotoHtml(st){
-  const url = st.photoUrl || st.photo || st.imageUrl || "";
-  if(url){
-    return `<img class="start-student-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start-student-photo&quot;>👤</div>'">`;
-  }
-  return `<div class="start-student-photo">👤</div>`;
+/* =========================================================
+   2026-11-24 學生大頭貼：全系統共用這一份
+   以前各個畫面版本（start931、start933、sc939、st106、v1529…）各寫一套，
+   現在都改呼叫這裡。照片網址欄位相容舊資料：photoUrl / photo / imageUrl。
+   - cls：圖片和沒照片時的框框共用的 class
+   - opts.fallback：沒照片或載入失敗時顯示的符號（預設 👤）
+   - opts.fallbackClass：沒照片時框框改用的 class（預設同 cls）
+   - opts.fallbackStyle：沒照片時框框的額外 style
+   ========================================================= */
+function studentPhotoUrl(st){
+  return String(st?.photoUrl || st?.photo || st?.imageUrl || "").trim();
 }
+function studentPhotoHtml(st, cls, opts={}){
+  const fallback = opts.fallback || "👤";
+  const fbClass = opts.fallbackClass || cls;
+  const fbStyle = opts.fallbackStyle ? ` style="${escapeHtml(opts.fallbackStyle)}"` : "";
+  const url = studentPhotoUrl(st);
+  if(!url) return `<div class="${fbClass}"${fbStyle}>${fallback}</div>`;
+  const onerr = `<div class=&quot;${fbClass}&quot;${opts.fallbackStyle ? ` style=&quot;${escapeHtml(opts.fallbackStyle)}&quot;` : ""}>${fallback}</div>`;
+  return `<img class="${cls}" loading="lazy" decoding="async" src="${escapeHtml(url)}" alt="${escapeHtml(st?.name || "學生")}" onerror="this.outerHTML='${onerr}'">`;
+}
+
+function startClassStudentPhotoHtml(st){ return studentPhotoHtml(st,"start-student-photo"); }
 
 function startClassAddXp(studentId,type,xp){
   if(!Array.isArray(state.growthLogs)) state.growthLogs = [];
@@ -10047,7 +10172,7 @@ const StudentPortal = {
   },
 
   photo(st){
-    return st?.photoUrl || st?.photo || st?.imageUrl || "";
+    return studentPhotoUrl(st);
   },
 
   xp(studentId){
@@ -10157,7 +10282,6 @@ function renderStudentPortal(){
   const xp = StudentPortal.xp(st.id);
   const points = StudentPortal.points(st.id);
   const lv = StudentPortal.levelFromXp(xp);
-  const photo = StudentPortal.photo(st);
 
   document.getElementById("app").innerHTML = `
     <section class="card">
@@ -10167,7 +10291,7 @@ function renderStudentPortal(){
       </div>
 
       <div class="student-portal-hero">
-        ${photo ? `<img class="student-portal-photo" loading="lazy" decoding="async" src="${escapeHtml(photo)}">` : `<div class="student-portal-photo">🐾</div>`}
+        ${studentPhotoHtml(st,"student-portal-photo",{fallback:"🐾"})}
         <div>
           <div class="student-portal-name">${escapeHtml(st.name || "未命名學生")}</div>
           <div class="student-portal-level">Lv.${lv.level}｜${escapeHtml(school?.name || "未指定學校")}｜${escapeHtml(cls?.name || "未指定課程")}</div>
@@ -10487,7 +10611,7 @@ function renderClassroomRollcall(students){
         return `
           <article class="card student-card">
             <div class="student-head">
-              ${student.photo ? `<img class="student-avatar" loading="lazy" decoding="async" src="${student.photo}" alt="${escapeHtml(student.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center;font-size:24px">👦</div>`}
+              ${studentPhotoHtml(student,"student-avatar",{fallback:"👦",fallbackStyle:"display:flex;align-items:center;justify-content:center;font-size:24px"})}
               <div>
                 <div class="student-name">${escapeHtml(student.name)}</div>
                 <div class="student-meta">
@@ -11286,6 +11410,8 @@ function saveTodayCourseNote(){
      第二項依課程單位設定為「排笛術科」或「平時成績」（class.scoreSecondKind），資料欄位都是 practical
    - 發點數：規則 state.scoreBonusRules，已發紀錄 state.scoreBonusAwards（考試＋課程單位＋學生）
    - 沒填的不列入排名；同分同名次，下一名跳號（1、1、3）
+   - 狀態 record.mark：absent 缺考（不列入排名、分數保留但不採計）、makeup 補考（照常計分，標「補」）
+   - 匯出 CSV（Excel 可開）、列印、和上一次考試比較的進步名單
    ========================================================= */
 let scoreContext = {
   termId:currentAcademicTermId(),
@@ -11345,6 +11471,24 @@ function scoreRecord(examId,studentId){
 function scoreValue(examId,studentId,field){
   const v = scoreRecord(examId,studentId)?.[field];
   return typeof v === "number" ? v : null;
+}
+
+const SCORE_MARKS = {absent:"缺考", makeup:"補考"};
+function scoreMark(examId,studentId){
+  const m = scoreRecord(examId,studentId)?.mark;
+  return SCORE_MARKS[m] ? m : "";
+}
+function scoreSetMark(examId,studentId,mark){
+  let rec = scoreRecord(examId,studentId);
+  if(!rec){
+    if(!mark) return;
+    rec = {examId, classId:scoreContext.classId, studentId, written:null, practical:null};
+    state.scoreRecords.push(rec);
+  }
+  if(SCORE_MARKS[mark]) rec.mark = mark; else delete rec.mark;
+  rec.updatedAt = localDateTimeString();
+  scoreSaveNow();
+  render();
 }
 
 function scoreSet(examId,studentId,field,value){
@@ -11410,9 +11554,11 @@ function scoreAddRanks(rows,key){
 
 function scoreExamRows(exam){
   const rows = studentsByClass(scoreContext.classId).map(student=>{
-    const written = scoreValue(exam.id,student.id,"written");
-    const practical = scoreValue(exam.id,student.id,"practical");
-    return {student, written, practical, total:scoreTotal(exam,written,practical)};
+    const mark = scoreMark(exam.id,student.id);
+    /* 缺考：分數保留在紀錄裡（取消缺考就回來），但不採計 */
+    const written = mark === "absent" ? null : scoreValue(exam.id,student.id,"written");
+    const practical = mark === "absent" ? null : scoreValue(exam.id,student.id,"practical");
+    return {student, mark, written, practical, total:scoreTotal(exam,written,practical)};
   });
   ["written","practical","total"].forEach(k=>scoreAddRanks(rows,k));
   return rows;
@@ -11450,8 +11596,16 @@ function scoreRankText(rank){
 
 function scoreStatsText(rows,key){
   const list = rows.map(r=>r[key]).filter(v=>v !== null);
-  if(!list.length) return "尚未登記";
-  return `平均 ${scoreAverage(list)}｜最高 ${Math.max(...list)}｜最低 ${Math.min(...list)}｜已登記 ${list.length}/${rows.length}`;
+  const absent = rows.filter(r=>r.mark === "absent").length;
+  const tail = absent ? `｜缺考 ${absent}` : "";
+  if(!list.length) return "尚未登記" + tail;
+  return `平均 ${scoreAverage(list)}｜最高 ${Math.max(...list)}｜最低 ${Math.min(...list)}｜已登記 ${list.length}/${rows.length}${tail}`;
+}
+/* 表格格子：缺考顯示「缺考」，補考在分數後標「補」 */
+function scoreCellText(row,key){
+  if(row.mark === "absent") return "缺考";
+  const v = scoreText(row[key]);
+  return row.mark === "makeup" && row[key] !== null ? `${v} 補` : v;
 }
 
 function scoreChangeContext(key,value){
@@ -11796,6 +11950,7 @@ function scoreBonusAward(examId){
   }));
   render();
   flashSaved(`✓ 已發點數給 ${plan.length} 位學生`);
+  showUploadReminder("點數發好了。記得上傳雲端，別台裝置才知道這次考試已經發過，不會重複發。");
 }
 function scoreBonusRevoke(examId){
   const exam = findById(state.scoreExams,examId);
@@ -11806,6 +11961,105 @@ function scoreBonusRevoke(examId){
   scoreBonusApply(exam,rows.map(x=>({studentId:x.studentId, points:-x.given, score:null, reason:`收回考試成績點數：${exam.name} ${scoreSigned(-x.given)}`})));
   render();
   flashSaved("✓ 已收回這次考試的點數");
+  showUploadReminder("點數已收回。記得上傳雲端，別台裝置才會同步。");
+}
+
+/* ---------- 匯出（CSV，Excel 可直接開）與列印 ---------- */
+function scoreCsvCell(v){
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function scoreRankPlain(rank){ return rank === null ? "" : rank; }
+function scoreExportTable(){
+  const exam = findById(scoreExamList(),scoreContext.examId);
+  const second = scoreSecondLabel(), short = scoreSecondShort();
+  if(exam){
+    const rows = scoreSorted(scoreExamRows(exam));
+    const head = ["座號","姓名","狀態","紙筆測驗","紙筆名次",second,short+"名次","總分","總名次","已發點數"];
+    const body = rows.map(r=>[r.student.seat || "", r.student.name, SCORE_MARKS[r.mark] || "",
+      r.mark === "absent" ? "" : (r.written ?? ""), scoreRankPlain(r.writtenRank),
+      r.mark === "absent" ? "" : (r.practical ?? ""), scoreRankPlain(r.practicalRank),
+      r.total ?? "", scoreRankPlain(r.totalRank), scoreBonusGiven(exam.id,r.student.id) || ""]);
+    return {title:exam.name, head, body};
+  }
+  const {perExam, rows} = scoreSummaryRows();
+  const head = ["座號","姓名"];
+  perExam.forEach(x=>head.push(`${x.exam.name} 紙筆`,`${x.exam.name} ${short}`,`${x.exam.name} 總分`));
+  head.push("紙筆平均","紙筆名次",short+"平均",short+"名次","總成績平均","總成績名次");
+  const body = scoreSorted(rows).map(r=>{
+    const line = [r.student.seat || "", r.student.name];
+    r.cells.forEach(c=>{
+      if(c.mark === "absent") line.push("缺考","缺考","缺考");
+      else line.push(c.written ?? "", c.practical ?? "", c.total ?? "");
+    });
+    ["written","practical","total"].forEach(k=>line.push(r[k+"Avg"] ?? "", scoreRankPlain(r[k+"Rank"])));
+    return line;
+  });
+  return {title:"學期總表", head, body};
+}
+function scoreExportCsv(){
+  scoreSaveNow();
+  const t = scoreExportTable();
+  const csv = "\ufeff" + [t.head,...t.body].map(line=>line.map(scoreCsvCell).join(",")).join("\r\n");
+  const name = [termName(scoreContext.termId), schoolName(scoreContext.schoolId), className(scoreContext.classId), t.title]
+    .filter(Boolean).join("_").replace(/[\\/:*?"<>|\s]+/g,"_");
+  const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+  flashSaved("✓ 已匯出成績（可用 Excel 開啟）");
+}
+function scorePrint(){
+  scoreSaveNow();
+  document.body.classList.add("score-printing");
+  const done = ()=>{ document.body.classList.remove("score-printing"); window.removeEventListener("afterprint",done); };
+  window.addEventListener("afterprint",done);
+  setTimeout(()=>{ window.print(); setTimeout(done,1000); },50);
+}
+function scoreOutputButtons(){
+  return `<button class="btn" onclick="scoreExportCsv()">⬇️ 匯出 Excel</button>
+    <button class="btn" onclick="scorePrint()">🖨️ 列印</button>`;
+}
+function scorePrintTitle(title){
+  return `<div class="score-print-title">${escapeHtml([termName(scoreContext.termId), schoolName(scoreContext.schoolId), className(scoreContext.classId), title].filter(Boolean).join("　"))}</div>`;
+}
+
+/* ---------- 進步名單：和上一次考試的總分比 ---------- */
+function scoreProgressList(exam){
+  const exams = scoreExamList();
+  const prev = exams[exams.findIndex(e=>e.id===exam.id) - 1];
+  if(!prev) return null;
+  const before = new Map(scoreExamRows(prev).map(r=>[r.student.id,r]));
+  const list = scoreExamRows(exam).map(r=>{
+    const b = before.get(r.student.id);
+    if(!b || r.total === null || b.total === null) return null;
+    return {student:r.student, from:b.total, to:r.total, diff:scoreRound(r.total - b.total)};
+  }).filter(Boolean).sort((a,b)=>b.diff - a.diff || a.student.name.localeCompare(b.student.name,"zh-Hant"));
+  return {prev, list};
+}
+function scoreProgressHtml(exam){
+  const p = scoreProgressList(exam);
+  if(!p) return "";
+  const up = p.list.filter(x=>x.diff > 0);
+  const summary = p.list.length
+    ? `📈 和「${escapeHtml(p.prev.name)}」比：${up.length} 位進步${up.length ? `，最多 +${up[0].diff} 分（${escapeHtml(up[0].student.name)}）` : ""}`
+    : `📈 和「${escapeHtml(p.prev.name)}」比：兩次都有總分的學生才會列出`;
+  return `<details class="score-progress" id="scoreProgress">
+    <summary>${summary}</summary>
+    ${p.list.length ? `<div class="score-scroll"><table class="score-table">
+      <thead><tr><th>名次</th><th>姓名</th><th>${escapeHtml(p.prev.name)}</th><th>這次</th><th>進退步</th></tr></thead>
+      <tbody>${p.list.map((x,i)=>`<tr>
+        <td>${x.diff > 0 && i < 3 ? ["🥇","🥈","🥉"][i] : i + 1}</td>
+        <td class="score-name">${escapeHtml(x.student.name)}</td>
+        <td>${x.from}</td><td>${x.to}</td>
+        <td class="${x.diff > 0 ? "score-bonus-done" : x.diff < 0 ? "score-bonus-todo" : "small-muted"}">${x.diff > 0 ? "+" : ""}${x.diff}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>` : `<div class="small-muted">目前還沒有學生兩次考試都有總分。</div>`}
+  </details>`;
 }
 
 function scoreStatsHtml(rows){
@@ -11826,11 +12080,18 @@ function renderScoreExamCard(exam){
   const w = scoreWeight(exam);
   const input = (r,field)=>`<input class="score-input" type="text" inputmode="decimal" autocomplete="off"
     aria-label="${escapeHtml(r.student.name)} ${scoreFieldLabel(field)}"
-    data-exam="${exam.id}" data-student="${r.student.id}" data-field="${field}" value="${r[field] ?? ""}"
+    data-exam="${exam.id}" data-student="${r.student.id}" data-field="${field}" value="${r.mark === "absent" ? "" : (scoreValue(exam.id,r.student.id,field) ?? "")}"
+    ${r.mark === "absent" ? `disabled placeholder="缺考"` : ""}
     onfocus="scoreInputFocus(this)" oninput="scoreInput(this)" onblur="scoreInputBlur(this)" onkeydown="scoreInputKey(event,this)">`;
 
+  const markSelect = r=>`<select class="score-mark ${r.mark ? "score-mark-" + r.mark : ""}" aria-label="${escapeHtml(r.student.name)} 狀態"
+    onchange="scoreSetMark('${exam.id}','${r.student.id}',this.value)">
+    <option value="">—</option>${Object.entries(SCORE_MARKS).map(([id,label])=>`<option value="${id}" ${r.mark===id?"selected":""}>${label}</option>`).join("")}
+  </select>`;
+
   return `
-    <section class="card">
+    <section class="card score-print-area">
+      ${scorePrintTitle(exam.name)}
       <div class="score-fields">
         <div><label>考試名稱</label><input value="${escapeHtml(exam.name)}" onchange="scoreRenameExam('${exam.id}',this.value)"></div>
         <div><label>紙筆占總分 %</label><input inputmode="decimal" value="${w}" onchange="scoreSetWeight('${exam.id}',this.value)"></div>
@@ -11843,15 +12104,17 @@ function renderScoreExamCard(exam){
           <button class="btn red" onclick="scoreDeleteExam('${exam.id}')">刪除這次考試</button>
         </div>
       </div>
-      <div class="small-muted" style="margin:10px 0">總分＝紙筆 ${w}%＋${scoreSecondShort()} ${scoreRound(100-w)}%。分數會自動儲存；沒填的不列入排名，同分同名次。</div>
+      <div class="score-actions score-output" style="margin-top:10px">${scoreOutputButtons()}</div>
+      <div class="small-muted" style="margin:10px 0">總分＝紙筆 ${w}%＋${scoreSecondShort()} ${scoreRound(100-w)}%。分數會自動儲存；沒填的不列入排名，同分同名次。「狀態」可標缺考（不列入排名）或補考（照常計分）。</div>
       <div class="score-message" id="scoreMessage" role="status"></div>
       ${rows.length ? scoreBonusBarHtml(exam,rows) : ""}
       ${rows.length ? `
       <div class="score-scroll"><table class="score-table">
-        <thead><tr><th>座號</th><th>姓名</th><th>紙筆測驗</th><th>紙筆名次</th><th>${scoreSecondLabel()}</th><th>${scoreSecondShort()}名次</th><th>總分</th><th>總名次</th><th>發點數</th></tr></thead>
+        <thead><tr><th>座號</th><th>姓名</th><th>狀態</th><th>紙筆測驗</th><th>紙筆名次</th><th>${scoreSecondLabel()}</th><th>${scoreSecondShort()}名次</th><th>總分</th><th>總名次</th><th>發點數</th></tr></thead>
         <tbody>${scoreSorted(rows).map(r=>`<tr>
           <td>${escapeHtml(r.student.seat || "")}</td>
           <td class="score-name">${escapeHtml(r.student.name)}</td>
+          <td>${markSelect(r)}</td>
           <td>${input(r,"written")}</td>
           <td id="score_written_${r.student.id}">${scoreRankText(r.writtenRank)}</td>
           <td>${input(r,"practical")}</td>
@@ -11861,7 +12124,8 @@ function renderScoreExamCard(exam){
           <td id="score_bonus_${r.student.id}">${scoreBonusCell(exam,r)}</td>
         </tr>`).join("")}</tbody>
       </table></div>
-      <div class="note" id="scoreStats">${scoreStatsHtml(rows)}</div>` : `<div class="note">這個課程單位目前沒有學生。</div>`}
+      <div class="note" id="scoreStats">${scoreStatsHtml(rows)}</div>
+      ${scoreProgressHtml(exam)}` : `<div class="note">這個課程單位目前沒有學生。</div>`}
     </section>`;
 }
 
@@ -11869,12 +12133,14 @@ function renderScoreSummaryCard(){
   const {perExam, rows} = scoreSummaryRows();
   if(!rows.length) return `<section class="card"><div class="note">這個課程單位目前沒有學生。</div></section>`;
   return `
-    <section class="card">
+    <section class="card score-print-area">
+      ${scorePrintTitle("學期總表")}
       <div class="score-fields">
         <div><h3 style="margin:0">📋 學期總表</h3></div>
         <div><label>排序方式</label>${scoreSortSelect()}</div>
+        <div class="score-actions score-output">${scoreOutputButtons()}</div>
       </div>
-      <div class="small-muted" style="margin:10px 0">平均只算已經登記的成績。已開始登記的考試只要缺一次，該項就不列入名次。</div>
+      <div class="small-muted" style="margin:10px 0">平均只算已經登記的成績。已開始登記的考試只要缺一次（含缺考），該項就不列入名次。</div>
       <div class="score-scroll"><table class="score-table">
         <thead>
           <tr><th rowspan="2">座號</th><th rowspan="2">姓名</th>${perExam.map(x=>`<th colspan="3">${escapeHtml(x.exam.name)}</th>`).join("")}<th colspan="2">紙筆</th><th colspan="2">${scoreSecondShort()}</th><th colspan="2">總成績</th></tr>
@@ -11883,7 +12149,7 @@ function renderScoreSummaryCard(){
         <tbody>${scoreSorted(rows).map(r=>`<tr>
           <td>${escapeHtml(r.student.seat || "")}</td>
           <td class="score-name">${escapeHtml(r.student.name)}</td>
-          ${r.cells.map(c=>`<td>${scoreText(c.written)}</td><td>${scoreText(c.practical)}</td><td>${scoreText(c.total)}</td>`).join("")}
+          ${r.cells.map(c=>`<td>${scoreCellText(c,"written")}</td><td>${scoreCellText(c,"practical")}</td><td>${scoreCellText(c,"total")}</td>`).join("")}
           ${["written","practical","total"].map(k=>`<td><b>${scoreText(r[k+"Avg"])}</b></td><td>${scoreRankText(r[k+"Rank"])}</td>`).join("")}
         </tr>`).join("")}</tbody>
       </table></div>
@@ -11893,8 +12159,12 @@ function renderScoreSummaryCard(){
 function renderScores(){
   scoreEnsure();
   const keepOpen = scoreKeepRulesOpen || !!document.querySelector(".score-bonus-rules[open]");
+  const keepProgress = !!document.querySelector("#scoreProgress[open]");
   scoreKeepRulesOpen = false;
-  setTimeout(()=>{ if(keepOpen) document.querySelector(".score-bonus-rules")?.setAttribute("open",""); },0);
+  setTimeout(()=>{
+    if(keepOpen) document.querySelector(".score-bonus-rules")?.setAttribute("open","");
+    if(keepProgress) document.getElementById("scoreProgress")?.setAttribute("open","");
+  },0);
   const exams = scoreExamList();
   const exam = findById(exams,scoreContext.examId);
   const canAdd = !!scoreContext.schoolId;
@@ -13482,7 +13752,7 @@ function renderStudentSettings(){
         ${studentList.map(s=>`
           <tr class="${s.active===false?'inactive-row':''}">
             <td>
-              ${s.photo ? `<img class="student-avatar" loading="lazy" decoding="async" src="${s.photo}" alt="${escapeHtml(s.name)}">` : `<div class="student-avatar" style="display:flex;align-items:center;justify-content:center">👦</div>`}
+              ${studentPhotoHtml(s,"student-avatar",{fallback:"👦",fallbackStyle:"display:flex;align-items:center;justify-content:center"})}
               <input style="margin-top:6px" value="${escapeHtml(s.photo || "")}" placeholder="照片網址" onchange="findById(state.students,'${s.id}').photo=this.value.trim(); saveState(); render()">
               <input style="margin-top:6px" type="file" accept="image/*" onchange="handleStudentPhoto(this.files[0],'${s.id}')">
             </td>
@@ -14492,13 +14762,7 @@ function start931Name(typeId){
   return t?.name || typeId || "成長紀錄";
 }
 
-function start931PhotoHtml(st){
-  const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url){
-    return `<img class="start931-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start931-photo&quot;>👤</div>'">`;
-  }
-  return `<div class="start931-photo">👤</div>`;
-}
+function start931PhotoHtml(st){ return studentPhotoHtml(st,"start931-photo"); }
 
 function start931Logs(studentId,limit=3){
   return (state.growthLogs || [])
@@ -14603,13 +14867,7 @@ function start933StudentPoints(studentId){
   return earned - spent;
 }
 
-function start933PhotoHtml(st){
-  const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url){
-    return `<img class="start933-photo" loading="lazy" decoding="async" src="${escapeHtml(url)}" onerror="this.outerHTML='<div class=&quot;start933-photo&quot;>👤</div>'">`;
-  }
-  return `<div class="start933-photo">👤</div>`;
-}
+function start933PhotoHtml(st){ return studentPhotoHtml(st,"start933-photo"); }
 
 function start933SetAttendance(studentId,value){
   start933Attendance[studentId] = value;
@@ -14848,11 +15106,7 @@ function sc939NowMin(){
 
 
 
-function sc939Photo(st){
-  const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url) return `<img class="sc939-photo" loading="lazy" decoding="async" src="${sc939Esc(url)}" onerror="this.outerHTML='<div class=&quot;sc939-photo&quot;>👤</div>'">`;
-  return `<div class="sc939-photo">👤</div>`;
-}
+function sc939Photo(st){ return studentPhotoHtml(st,"sc939-photo"); }
 
 function sc939AttendanceMeta(studentId){
   const val = sc939Attendance[studentId] || "arrived";
@@ -15995,11 +16249,7 @@ function st106Points(studentId){
   const spent = (state.redeemLogs || []).filter(l=>l.studentId===studentId).reduce((s,l)=>s+(Number(l.cost ?? l.points ?? 0)||0),0);
   return earned - spent;
 }
-function st106Photo(st){
-  const url = st?.photoUrl || st?.photo || st?.imageUrl || "";
-  if(url) return `<img class="st106-photo" loading="lazy" decoding="async" src="${st106Esc(url)}" onerror="this.outerHTML='<div class=&quot;st106-photo&quot;>👤</div>'">`;
-  return `<div class="st106-photo">👤</div>`;
-}
+function st106Photo(st){ return studentPhotoHtml(st,"st106-photo"); }
 function st106AttendanceMeta(id){
   const val = st106Attendance[id] || "arrived";
   const map = {
@@ -28666,11 +28916,7 @@ ST160_StateGuard.install();
   }
   function cls(){ try{ return (typeof st106Class === 'function') ? st106Class() : null; }catch(e){ return null; } }
   function school(){ try{ return (typeof st106School === 'function') ? st106School() : null; }catch(e){ return null; } }
-  function photo(st){
-    const url = st?.photoUrl || st?.photo || st?.imageUrl || '';
-    if(url) return `<img class="v1529-avatar-img" loading="lazy" decoding="async" src="${esc(url)}" alt="${esc(st?.name||'學生')}" onerror="this.outerHTML='<div class=&quot;v1529-avatar-fallback&quot;>👤</div>'">`;
-    return `<div class="v1529-avatar-fallback">👤</div>`;
-  }
+  function photo(st){ return studentPhotoHtml(st,"v1529-avatar-img",{fallbackClass:"v1529-avatar-fallback"}); }
   function xp(st){ try{ return (typeof st106Xp === 'function') ? st106Xp(st.id) : (Number(st?.xp || 0)||0); }catch(e){ return Number(st?.xp||0)||0; } }
   function points(st){ try{ return (typeof st106Points === 'function') ? st106Points(st.id) : (Number(st?.points || st?.point || 0)||0); }catch(e){ return Number(st?.points||0)||0; } }
   function attendanceValue(id){
