@@ -964,6 +964,12 @@ body.dark-mode .sync-status.urgent{background:#4a3c1a;color:#ffd970}
 .score-table select.score-mark-absent{color:var(--red-dark);border-color:var(--red-dark)}
 .score-table select.score-mark-makeup{color:#2d65b0;border-color:#2d65b0}
 .score-table input.score-input:disabled{opacity:.55}
+.photo-compress-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.photo-compress-row>.btn{width:auto;min-height:44px}
+.photo-compress-row>div{flex:1 1 260px;min-width:0}
+.photo-compress-row .btn{width:auto;padding:4px 12px}
+.photo-compress-bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
+.photo-compress-bar span{display:block;height:100%;background:var(--mint-dark,#2f7d4d);transition:width .3s}
 .score-progress{margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:14px}
 .score-progress summary{cursor:pointer;font-weight:800;min-height:32px;padding:4px 0}
 .score-print-title{display:none}
@@ -7194,7 +7200,8 @@ const SYNC_IMPORTANT_RULES = [
   [/^考試成績$/, "考試成績"],
   [/獎品兌換/, "獎品兌換"],
   [/XP|點數/, "點數"],
-  [/^出席/, "出席"]
+  [/^出席/, "出席"],
+  [/照片/, "學生照片"]
 ];
 function localHasUnsyncedChanges(){
   const m = state.backupMeta || {};
@@ -9021,6 +9028,104 @@ function studentPhotoHtml(st, cls, opts={}){
 }
 
 function startClassStudentPhotoHtml(st){ return studentPhotoHtml(st,"start-student-photo"); }
+
+/* =========================================================
+   2026-11-24 一鍵壓縮舊照片
+   以前上傳的大頭貼最大 1200px，載入慢。這裡把每位學生的照片下載下來，
+   縮到 400px 再上傳 ImgBB，換成新網址（ImgBB 圖片允許跨站讀取，canvas 可用）。
+   - 已經 ≤ 420px 的跳過；失敗的保留原照片並列出名字
+   - 原網址存在 student.photoOriginal，萬一要找回來
+   - 一次一張依序處理，可以中途停止；換好的會立刻存檔
+   ========================================================= */
+const PHOTO_COMPRESS_MAX = 400;
+let photoCompressJob = null;
+function photoCompressField(st){
+  return ["photoUrl","photo","imageUrl"].find(k=>String(st?.[k] || "").trim()) || null;
+}
+function photoCompressLoad(blob){
+  return new Promise((resolve,reject)=>{
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("圖片無法讀取")); };
+    img.src = url;
+  });
+}
+async function photoCompressOne(st){
+  const field = photoCompressField(st);
+  const src = String(st[field]).trim();
+  const res = await fetch(src,{mode:"cors",cache:"no-store"});
+  if(!res.ok) throw new Error("下載失敗 " + res.status);
+  const img = await photoCompressLoad(await res.blob());
+  if(Math.max(img.naturalWidth,img.naturalHeight) <= PHOTO_COMPRESS_MAX + 20) return "small";
+  const scale = PHOTO_COMPRESS_MAX / Math.max(img.naturalWidth,img.naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(img.naturalWidth * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(img,0,0,canvas.width,canvas.height);
+  const form = new FormData();
+  form.append("key", IMGBB_API_KEY);
+  form.append("image", canvas.toDataURL("image/jpeg",.85).split(",")[1]);
+  const up = await (await fetch("https://api.imgbb.com/1/upload",{method:"POST",body:form})).json();
+  if(!up?.success || !up.data?.url) throw new Error(up?.error?.message || "上傳失敗");
+  /* 處理中途照片被改掉了就不要蓋 */
+  if(String(st[field] || "").trim() !== src) return "changed";
+  if(!st.photoOriginal) st.photoOriginal = src;
+  st[field] = up.data.url;
+  return "done";
+}
+function photoCompressStatusHtml(){
+  const j = photoCompressJob;
+  if(!j) return `<span class="small-muted">會處理所有學校、所有班級學生的照片，已經是小張的會自動跳過。</span>`;
+  const counts = `已縮小 ${j.done}｜本來就小 ${j.small}｜失敗 ${j.failed.length}`;
+  if(j.running) return `<b>處理中 ${j.index}/${j.total}</b>（${escapeHtml(j.current || "")}）｜${counts}　<button class="btn" onclick="photoCompressStop()">停止</button>
+    <div class="photo-compress-bar"><span style="width:${j.total ? Math.round(j.index / j.total * 100) : 0}%"></span></div>`;
+  return `<b>${j.stopped ? "已停止" : "✅ 完成"}</b>｜${counts}${j.failed.length ? `<div class="small-muted">沒成功的（保留原照片，可以再按一次重試）：${escapeHtml(j.failed.join("、"))}</div>` : ""}`;
+}
+function photoCompressRefresh(){
+  const el = document.getElementById("photoCompressStatus");
+  if(el) el.innerHTML = photoCompressStatusHtml();
+  const btn = document.getElementById("photoCompressBtn");
+  if(btn) btn.disabled = !!photoCompressJob?.running;
+}
+function photoCompressStop(){ if(photoCompressJob) photoCompressJob.stopped = true; }
+async function photoCompressAll(){
+  if(photoCompressJob?.running) return;
+  const list = ensureArray(state.students).filter(st=>photoCompressField(st));
+  if(!list.length) return alert("目前沒有學生有照片。");
+  if(!navigator.onLine) return alert("目前沒有網路，請連上網路再試。");
+  if(!confirm(`找到 ${list.length} 位學生有照片。\n\n會一張一張下載、縮小到 ${PHOTO_COMPRESS_MAX} 像素，再重新上傳，換成新的照片網址（大約每張 1～3 秒）。\n本來就小的會跳過；過程中可以按「停止」。\n\n完成後記得按「上傳雲端」，別台才會換成新照片。\n\n開始壓縮？`)) return;
+  const job = photoCompressJob = {running:true, stopped:false, total:list.length, index:0, done:0, small:0, failed:[], current:""};
+  photoCompressRefresh();
+  for(const st of list){
+    if(job.stopped) break;
+    job.index++;
+    job.current = st.name || "";
+    photoCompressRefresh();
+    try{
+      const r = await photoCompressOne(st);
+      if(r === "done"){
+        job.done++;
+        try{ saveState(); }catch(e){ console.warn(e); }
+      }else if(r === "small") job.small++;
+    }catch(err){
+      console.warn("photo compress failed", st.name, err);
+      job.failed.push(st.name || "未命名");
+    }
+  }
+  job.running = false;
+  job.current = "";
+  if(job.done){
+    try{ saveState(); }catch(e){ console.warn(e); }
+    try{ markDirty("壓縮舊照片"); }catch(e){}
+    showUploadReminder(`已把 ${job.done} 張照片縮小。記得上傳雲端，別台裝置才會換成新照片。`);
+  }
+  photoCompressRefresh();
+  try{ render(); }catch(e){}
+}
 
 function startClassAddXp(studentId,type,xp){
   if(!Array.isArray(state.growthLogs)) state.growthLogs = [];
@@ -13742,6 +13847,15 @@ function renderStudentSettings(){
           </div>
         </div>
         <div class="f12"><button class="btn primary" onclick="addStudent()">新增學生</button></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>🗜️ 壓縮舊照片</h3>
+      <div class="note">以前上傳的照片比較大，打開頁面時載入很慢。按下去會把舊照片都縮成小張重新上傳，畫面看起來一樣清楚。</div>
+      <div class="photo-compress-row">
+        <button class="btn gold" id="photoCompressBtn" ${photoCompressJob?.running ? "disabled" : ""} onclick="photoCompressAll()">🗜️ 一鍵壓縮舊照片</button>
+        <div id="photoCompressStatus" role="status">${photoCompressStatusHtml()}</div>
       </div>
     </section>
 
