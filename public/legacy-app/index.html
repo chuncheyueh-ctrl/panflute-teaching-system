@@ -6442,6 +6442,40 @@ window.BTMainStore = BTMainStore;
 <script type="text/bt-app">
 window.addEventListener('unhandledrejection', function(e){ console.error(e.reason); });
 
+/* 成功訊息用不擋畫面的小提示，幾秒後自動消失；點一下也可以關掉。
+   錯誤、警告、需要使用者讀完的說明仍然用 alert。 */
+function showToast(msg, ms){
+  try{
+    let box = document.getElementById("btToastBox");
+    if(!box){
+      if(!document.getElementById("btToastStyle")){
+        const s = document.createElement("style");
+        s.id = "btToastStyle";
+        s.textContent = `#btToastBox{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:2147483000;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;width:max-content;max-width:calc(100vw - 32px)}
+.bt-toast{pointer-events:auto;background:#1f7a4d;color:#fff;font-size:16px;font-weight:700;line-height:1.4;padding:10px 18px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.22);white-space:pre-line;text-align:center;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s}
+.bt-toast.show{opacity:1;transform:none}
+@media(max-width:720px){#btToastBox{bottom:auto;top:14px}}
+@media print{#btToastBox{display:none}}`;
+        document.head.appendChild(s);
+      }
+      box = document.createElement("div");
+      box.id = "btToastBox";
+      box.setAttribute("role","status");
+      box.setAttribute("aria-live","polite");
+      document.body.appendChild(box);
+    }
+    const t = document.createElement("div");
+    t.className = "bt-toast";
+    t.textContent = "✅ " + String(msg ?? "").replace(/^\s*(✅|🔥)\s*/, "");
+    const close = ()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(), 250); };
+    t.onclick = close;
+    box.appendChild(t);
+    while(box.children.length > 3) box.firstChild.remove();
+    requestAnimationFrame(()=>t.classList.add("show"));
+    setTimeout(close, ms || Math.min(6000, 2200 + String(msg ?? "").length * 60));
+  }catch(e){ alert(msg); }
+}
+
 window.addEventListener('error', function(e){
   const app = document.getElementById("app");
   if(app){
@@ -6775,7 +6809,7 @@ async function firebaseUploadAll(silent=false, force=false) {
     hideCloudWarning?.();
     markClean();
     render();
-    if(!silent) alert("🔥 Firebase 上傳成功");
+    if(!silent) showToast("雲端上傳成功");
     return true;
   } catch (err) {
     console.error("Firebase upload failed:", err);
@@ -6960,7 +6994,7 @@ async function firebaseDownloadAll() {
     render();
 
     renderSyncStatus();
-    alert("🔥 Firebase 讀取成功");
+    showToast("雲端讀取成功");
   } catch (err) {
     console.error("Firebase download failed:", err);
     syncStatus.syncing = false;
@@ -7639,7 +7673,7 @@ function hideDeviceLockWarning(){
 async function takeOverDeviceLock(){
   await heartbeatSessionLock(true);
   hideDeviceLockWarning();
-  alert("已接管編輯權。接下來這台裝置可以上傳雲端。");
+  showToast("已接管編輯權，這台裝置可以上傳雲端了");
   renderSyncStatus?.();
 }
 
@@ -7690,7 +7724,7 @@ async function checkFirebaseFreshness(showAlert=false){
     if(syncStatus.cloudIsNewer){
       showCloudNewerWarning();
     }else if(showAlert){
-      alert("目前沒有偵測到較新的雲端資料。");
+      showToast("雲端沒有更新的資料，目前已是最新");
     }
 
     return {
@@ -8155,7 +8189,7 @@ function saveTodayCourseNoteFixed(){
   });
   markDirty("課程紀錄");
   render();
-  alert("課程紀錄已儲存");
+  showToast("課程紀錄已儲存");
 }
 
 function passExam(studentId,comment){
@@ -8192,7 +8226,7 @@ function passExam(studentId,comment){
 
   saveState();
   render();
-  alert(`升級成功，已加 ${reward} 點`);
+  showToast(`升級成功，已加 ${reward} 點`);
 }
 
 function failExam(studentId,comment){
@@ -8965,7 +8999,7 @@ async function finishStartClass(){
 
   try{ await guardedFirebaseUpload(false); }catch(err){ console.warn("finishStartClass sync failed", err); }
 
-  alert("已儲存這堂課。");
+  showToast("已儲存這堂課");
   exitStartClassMode();
 }
 
@@ -9145,7 +9179,7 @@ function startClassAddXp(studentId,type,xp){
   });
   markDirty?.("開始上課快速XP");
   saveState();
-  alert(`已新增 XP +${xp}`);
+  showToast(`已新增 XP +${xp}`);
   renderStartClassMode();
 }
 
@@ -9351,7 +9385,7 @@ const RewardCore = {
     reward.stock = Math.max(0, Number(reward.stock ?? 0) - 1);
     saveState();
     markDirty?.("獎品兌換");
-    alert("兌換完成。");
+    showToast("兌換完成");
     renderRewards();
   },
 
@@ -9369,7 +9403,7 @@ const RewardCore = {
     state.redeemLogs = state.redeemLogs.filter(x=>x.id!==logId);
     saveState();
     markDirty?.("取消獎品兌換");
-    alert("已取消兌換。");
+    showToast("已取消兌換");
     renderRewards();
   }
 };
@@ -10162,7 +10196,7 @@ function renderPerformanceExportV8(p){
     <section class="card">
       <h3>📤 匯出公告 / 行政資料</h3>
       <textarea style="min-height:260px">${escapeHtml(text)}</textarea>
-      <button class="btn primary" onclick="navigator.clipboard?.writeText(this.previousElementSibling.value); alert('已複製')">複製公告內容</button>
+      <button class="btn primary" onclick="navigator.clipboard?.writeText(this.previousElementSibling.value); showToast('已複製')">複製公告內容</button>
     </section>
     <section class="card">
       <h3>📊 曲目演出名單 CSV 匯出</h3>
@@ -11247,7 +11281,7 @@ function applyModeTemplateToWeeklyPlan(templateId){
   if(typeof lessonSave === "function") lessonSave(`套用模式模板：${t.name || ""}`);
   else saveState();
   if(typeof window.lessonRenderWeeklyPlan === "function") window.lessonRenderWeeklyPlan(rec);
-  alert(`已套用「${t.name || t.title || "模式模板"}」到本週主線，記得確認內容後也同步到今天課堂流程。`);
+  showToast(`已套用「${t.name || t.title || "模式模板"}」到本週主線\n記得確認內容後也同步到今天課堂流程`, 6000);
 }
 
 
@@ -11312,7 +11346,7 @@ function copyWeeklyReport(){
   const box = document.getElementById("weeklyReportText");
   if(!box) return;
   navigator.clipboard?.writeText(box.textContent || "");
-  alert("週報已複製");
+  showToast("週報已複製");
 }
 
 /* REPORT MODULE: Weekly Report */
@@ -11346,7 +11380,7 @@ function saveWeeklyMainline(){
   saveState();
   markDirty?.("本週主線");
   render();
-  alert("本週主線已儲存，今天課堂會同步更新勾選清單。");
+  showToast("本週主線已儲存");
 }
 
 function weeklyMainTasks(){
@@ -11407,7 +11441,7 @@ function saveLinkedCourseNote(){
       saveState();
       markDirty?.("清空課程紀錄");
       render();
-      alert("今日課程紀錄已清空。");
+      showToast("今日課程紀錄已清空");
     }else{
       alert("目前沒有可儲存的內容。");
     }
@@ -11425,7 +11459,7 @@ function saveLinkedCourseNote(){
   });
   markDirty?.("課程紀錄");
   render();
-  alert("課程紀錄已儲存，已自動整理完成與未完成項目。");
+  showToast("課程紀錄已儲存，已整理完成與未完成項目");
 }
 
 
@@ -14251,7 +14285,7 @@ async function uploadToCloud(){
     state.backupMeta.lastCloudUploadAt = localIsoLikeString();
     recordActivity("cloud","已送出完整資料到 Google Sheet", {});
     saveState();
-    alert("已送出完整資料到 Google Sheet。若資料很大，請等 2–3 秒後再讀取確認。");
+    showToast("已送出完整資料到 Google Sheet");
     render();
   }catch(err){
     console.error(err);
@@ -14270,7 +14304,7 @@ async function downloadFromCloud(){
     if(!state.backupMeta) state.backupMeta = {};
     state.backupMeta.lastCloudDownloadAt = localIsoLikeString();
     saveState();
-    alert("已用 JSONP 從 Google Sheet 讀取完整資料。");
+    showToast("已從 Google Sheet 讀取完整資料");
     render();
   }catch(err){
     console.error(err);
@@ -14668,7 +14702,7 @@ function saveGasUrl(){
   localStorage.setItem("battle_gas_url", cfg.gasUrl);
   saveState();
   markDirty?.("Google Sheet URL");
-  alert("URL 已儲存");
+  showToast("URL 已儲存");
 }
 
 /* SYNC MODULE: Backup Settings */
@@ -14791,7 +14825,7 @@ function importBackup(file){
     try{
       replaceWholeState(migrateState(JSON.parse(reader.result)), "restore");
       saveState();
-      alert("匯入完成");
+      showToast("匯入完成");
       render();
     }catch(err){
       alert("匯入失敗，請確認檔案格式");
@@ -15462,7 +15496,7 @@ function v940SaveTodayFlow(){
   localStorage.setItem("battle_start_class_time", start);
   try{ markDirty?.("今天課堂流程"); }catch(e){}
   try{ saveState(); }catch(e){}
-  alert("今天課堂流程已儲存，開始上課會同步更新。");
+  showToast("今天課堂流程已儲存");
   try{ render(); }catch(e){}
 }
 
@@ -15657,7 +15691,7 @@ function v942Key(){const term=state.currentTerm||document.getElementById("termSe
 function v942EnsureStore(){if(!state.todayLessons||typeof state.todayLessons!=="object")state.todayLessons={}}
 function v942DefaultLesson(){const oldFlow=(typeof v940GetTodayFlow==="function")?v940GetTodayFlow():null;const tasks=oldFlow?.tasks?.length?oldFlow.tasks:(typeof v940DefaultTasks==="function"?v940DefaultTasks():[{title:"暖身",minutes:5},{title:"本週主線",minutes:15},{title:"個別檢查",minutes:15},{title:"收尾回饋",minutes:5}]);return {startTime:oldFlow?.startTime||localStorage.getItem("battle_start_class_time")||"10:30",tasks:tasks.map(t=>({title:t.title,minutes:Number(t.minutes)||5,done:!!t.done})),reminder:"",homework:"",note:""}}
 function v942Lesson(){v942EnsureStore();const key=v942Key();if(!state.todayLessons[key])state.todayLessons[key]=v942DefaultLesson();const lesson=state.todayLessons[key];if(!Array.isArray(lesson.tasks)||!lesson.tasks.length)lesson.tasks=v942DefaultLesson().tasks;if(!lesson.startTime)lesson.startTime="10:30";return lesson}
-function v942SaveLesson(){v942EnsureStore();const key=v942Key();const rows=v942CollectRows();const lesson=v942Lesson();lesson.startTime=document.getElementById("v940StartTime")?.value||lesson.startTime||"10:30";lesson.tasks=rows.length?rows:lesson.tasks;lesson.reminder=document.getElementById("v942Reminder")?.value||"";lesson.homework=document.getElementById("v942Homework")?.value||"";lesson.note=document.getElementById("v942Note")?.value||"";state.todayLessons[key]=lesson;if(typeof v940GetTodayFlow==="function"){const flow=v940GetTodayFlow();flow.startTime=lesson.startTime;flow.tasks=lesson.tasks.map(t=>({title:t.title,minutes:t.minutes,done:t.done}))}localStorage.setItem("battle_start_class_time",lesson.startTime);try{markDirty?.("今天課堂流程")}catch(e){}try{saveState()}catch(e){}alert("今天課堂流程已儲存，開始上課會同步更新。");try{render()}catch(e){}}
+function v942SaveLesson(){v942EnsureStore();const key=v942Key();const rows=v942CollectRows();const lesson=v942Lesson();lesson.startTime=document.getElementById("v940StartTime")?.value||lesson.startTime||"10:30";lesson.tasks=rows.length?rows:lesson.tasks;lesson.reminder=document.getElementById("v942Reminder")?.value||"";lesson.homework=document.getElementById("v942Homework")?.value||"";lesson.note=document.getElementById("v942Note")?.value||"";state.todayLessons[key]=lesson;if(typeof v940GetTodayFlow==="function"){const flow=v940GetTodayFlow();flow.startTime=lesson.startTime;flow.tasks=lesson.tasks.map(t=>({title:t.title,minutes:t.minutes,done:t.done}))}localStorage.setItem("battle_start_class_time",lesson.startTime);try{markDirty?.("今天課堂流程")}catch(e){}try{saveState()}catch(e){}showToast("今天課堂流程已儲存");try{render()}catch(e){}}
 function v942CollectRows(){const rows=[...document.querySelectorAll("#v940TaskEditor .v942-flow-row")];return rows.map(row=>({title:row.querySelector(".v942-title")?.value?.trim()||"",minutes:Math.max(1,Number(row.querySelector(".v942-min")?.value||1)),done:!!row.querySelector(".v942-done")?.checked})).filter(x=>x.title)}
 function v942TimeToMin(t){const [h,m]=String(t||"10:30").split(":").map(n=>Number(n)||0);return h*60+m}function v942MinToTime(total){total=((Number(total)||0)+1440)%1440;const h=Math.floor(total/60);const m=total%60;return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`}function v942NowMin(){const d=new Date();return d.getHours()*60+d.getMinutes()}
 function v942UpdatePreview(){const start=document.getElementById("v940StartTime")?.value||v942Lesson().startTime||"10:30";let cur=v942TimeToMin(start);let total=0;const rows=[...document.querySelectorAll("#v940TaskEditor .v942-flow-row")];rows.forEach(row=>{const min=Math.max(1,Number(row.querySelector(".v942-min")?.value||1));total+=min;const prev=row.querySelector(".v942-time-preview");if(prev)prev.textContent=`${v942MinToTime(cur)} - ${v942MinToTime(cur+min)}`;cur+=min});const totalBox=document.getElementById("v940Total");if(totalBox)totalBox.textContent=`總計 ${total} 分鐘`;const totalReadonly=document.getElementById("v940TotalReadonly");if(totalReadonly)totalReadonly.value=total}
@@ -15835,7 +15869,7 @@ function curr103SaveBinding(){
   try{ const cls = lesson102CurrentClass?.(); if(cls) cls.curriculumTemplateId = bind.templateId; }catch(e){}
   try{ markDirty?.("固定課綱綁定"); }catch(e){}
   try{ saveState(); }catch(e){}
-  alert("固定課綱綁定已儲存。");
+  showToast("固定課綱綁定已儲存");
   try{ render(); }catch(e){}
 }
 function curr103RenderBindingControls(template){
@@ -16285,7 +16319,7 @@ function st106AddCarryToToday(){
   });
   st106SaveCarryList([]);
   try{saveState();}catch(e){}
-  alert("已加入今天流程。");
+  showToast("已加入今天流程");
   renderStartClassMode();
 }
 function st106DismissCarry(){
@@ -16916,7 +16950,7 @@ function st1063CloseSummary(){
 async function st1063CopySummary(){
   try{
     await navigator.clipboard.writeText(st1063SummaryText());
-    alert("已複製課堂摘要！");
+    showToast("已複製課堂摘要");
   }catch(e){
     alert("複製失敗");
   }
@@ -21536,7 +21570,7 @@ const ST150_SaveCore = {
   /* 按鈕用：等真的寫進去才回報 */
   async manualBackup(){
     const ok = this.snapshot("manual", true) && await this.lastWrite;
-    alert(ok ? "已建立手動備份" : "備份失敗，請改用「匯出備份 JSON」。");
+    (ok ? showToast("已建立手動備份") : alert("備份失敗，請改用「匯出備份 JSON」。"));
     if(document.getElementById("snapshotPanelBox")) renderSnapshotPanel();
   },
 
@@ -21940,7 +21974,7 @@ const ST160_StateGuard = {
     syncStatus.dirty = true;
 
     try{ render(); }catch(e){ console.warn("ST160 undo render failed",e); }
-    alert(`已復原：${last.reason}`);
+    showToast(`已復原：${last.reason}`);
     return true;
   },
 
@@ -22108,9 +22142,9 @@ const ST160_StateGuard = {
       <div class="st160-stateguard-panel">
         🧬 StateGuard：${dirty}｜驗證：${validation}｜可復原：${undoCount}
         <div class="st160-actions">
-          <button class="st160-btn primary" onclick="ST160_StateGuard.repair(); ST160_StateGuard.requestSave('manual'); alert('已檢查並儲存')">檢查並儲存</button>
+          <button class="st160-btn primary" onclick="ST160_StateGuard.repair(); ST160_StateGuard.requestSave('manual'); showToast('已檢查並儲存')">檢查並儲存</button>
           <button class="st160-btn" onclick="ST160_StateGuard.undo()">復原上一步</button>
-          <button class="st160-btn" onclick="console.log(ST160_StateGuard.validate(state)); alert('驗證結果已輸出到 console')">驗證資料</button>
+          <button class="st160-btn" onclick="console.log(ST160_StateGuard.validate(state)); showToast('驗證結果已輸出到 console')">驗證資料</button>
         </div>
       </div>
     `;
@@ -22317,7 +22351,7 @@ ST160_StateGuard.install();
       this.refreshStudentTextarea(delta.studentId, reverted);
 
       try{ renderStartClassMode?.(); }catch(e){}
-      alert(`已復原：${delta.action}`);
+      showToast(`已復原：${delta.action}`);
       return true;
     },
 
@@ -22429,7 +22463,7 @@ ST160_StateGuard.install();
           🧩 RuntimeKernel：結構共享已啟用｜差量復原：${this.undoStack.length}
           <div class="st170-actions">
             <button class="st170-btn primary" onclick="ST170_RuntimeKernel.undo()">差量復原上一步</button>
-            <button class="st170-btn" onclick="console.log(ST170_RuntimeKernel.undoStack); alert('差量紀錄已輸出到 console')">查看差量</button>
+            <button class="st170-btn" onclick="console.log(ST170_RuntimeKernel.undoStack); showToast('差量紀錄已輸出到 console')">查看差量</button>
           </div>
         </div>
       `;
@@ -23493,7 +23527,7 @@ ST160_StateGuard.install();
           ST190_CleanCore.ViewRenderer.updateStudent(result.delta.studentId,result.student);
           ST190_CleanCore.BackgroundServices.queueSave("undo");
           ST190_CleanCore.BackgroundServices.queueCloud("undo");
-          alert(`已復原：${result.delta.action}`);
+          showToast(`已復原：${result.delta.action}`);
           return true;
         }
         return false;
@@ -23586,7 +23620,7 @@ ST160_StateGuard.install();
           🧠 Clean Core Runtime：Data / View / Action / Background 已分層
           <div class="st190-clean-core-actions">
             <button class="st190-btn primary" onclick="ST190_CleanCore.ActionLayer.undo()">Clean Undo</button>
-            <button class="st190-btn" onclick="console.log(ST190_CleanCore.DataKernel.undoStack); alert('Clean Core undo stack 已輸出到 console')">查看 Undo</button>
+            <button class="st190-btn" onclick="console.log(ST190_CleanCore.DataKernel.undoStack); showToast('Clean Core undo stack 已輸出到 console')">查看 Undo</button>
           </div>
         </div>
       `;
@@ -23963,7 +23997,7 @@ ST160_StateGuard.install();
         reward.stock = Math.max(0, Number(reward.stock ?? 0) - 1);
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
         try{ if(typeof markDirty === "function") markDirty("獎品兌換"); }catch(e){}
-        alert("兌換完成。");
+        showToast("兌換完成");
         try{ if(typeof renderRewards === "function") renderRewards(); else renderAfterPointChange(); }catch(e){ renderAfterPointChange(); }
       };
       window.RewardCore.cancelRedeem = function(logId){
@@ -23979,7 +24013,7 @@ ST160_StateGuard.install();
         adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
         try{ if(typeof markDirty === "function") markDirty("取消獎品兌換"); }catch(e){}
-        alert("已取消兌換。");
+        showToast("已取消兌換");
         try{ if(typeof renderRewards === "function") renderRewards(); else renderAfterPointChange(); }catch(e){ renderAfterPointChange(); }
       };
     }
