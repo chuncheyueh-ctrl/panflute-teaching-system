@@ -4470,6 +4470,12 @@ body.dark-mode .st1064-future-lab{
   background:rgba(127,200,169,.18);
   color:#32765e;
 }
+.st108-copilot{padding:10px 12px !important;}
+.st108-copilot-row{display:flex;gap:8px;align-items:flex-start;font-weight:800;line-height:1.5;}
+.st108-copilot.good .st108-copilot-text{color:#2f6b4a;}
+.st108-copilot.danger .st108-copilot-text{color:#a33a3a;}
+.st108-copilot-action{margin-top:8px;width:auto !important;padding:8px 14px;border-radius:12px;border:0;background:#7a5af5;color:#fff;font-weight:800;cursor:pointer;}
+.st106-flow .st106-suggestion{display:none !important;}
 .st107-copilot-strong{
   margin-top:10px;
   padding:10px 12px;
@@ -17273,19 +17279,46 @@ function st107AnalyzeRhythm(){
   return items;
 }
 
+/* 教學副駕駛：只講一件最重要的事；落後時附一個按鈕，一按就把其餘任務保留至下次。
+   （各條提醒的原始判斷仍保留在 st1064CopilotItems / st107AnalyzeRhythm，課堂 Replay 匯出會用到。） */
+function st107CarryCandidates(){
+  const tasks = st106Tasks();
+  const pending = tasks.map((t,idx)=>({t,idx})).filter(x=>ST1062_TaskEngine.status(x.t)==="pending");
+  return pending.slice(1).map(x=>x.idx); /* 第一個未完成的是現在正在上的，保留給老師自己決定 */
+}
+function st107CarryRest(){
+  const tasks = st106Tasks();
+  const idxs = st107CarryCandidates();
+  if(!idxs.length) return {ok:false, changed:0};
+  const apply = (list,status)=>{
+    list.forEach(i=>{ if(tasks[i]){ tasks[i].status = status; tasks[i].done = status==="done"; } });
+    try{ st106SyncCarryTasks(); }catch(e){}
+    try{ saveState(); }catch(e){}
+    renderStartClassMode();
+  };
+  apply(idxs,"carry");
+  try{
+    showToast(`已將 ${idxs.length} 個任務保留至下次`, {ms:6000, icon:"↷ ", actionLabel:"復原", onAction:()=>{
+      apply(idxs.filter(i=>ST1062_TaskEngine.status(tasks[i])==="carry"),"pending");
+      showToast("已復原", {icon:"↩️ "});
+    }});
+  }catch(e){}
+  return {ok:true, changed:idxs.length};
+}
 function st107EnhancedCopilotHtml(){
   const basic = st1064CopilotItems ? st1064CopilotItems() : [];
   const rhythm = st107AnalyzeRhythm();
-  const all = [...basic, ...rhythm].filter((x,idx,arr)=>arr.findIndex(y=>y.text===x.text)===idx);
+  const all = [...basic, ...rhythm];
+  const order = ["danger","warn","carry","good"];
+  const top = order.map(t=>all.find(i=>i.type===t)).find(Boolean) || {type:"good",text:"目前節奏穩定，維持現在流程即可。"};
+  const rest = top.type==="danger" ? st107CarryCandidates().length : 0;
   return `
-    <div class="st1064-copilot">
-      <div class="st1064-copilot-title">🧭 教學副駕駛</div>
-      <div class="st1064-copilot-list">
-        ${all.map(i=>`<div class="st1064-copilot-item ${i.type}">${st106Esc(i.text)}</div>`).join("")}
+    <div class="st1064-copilot st108-copilot ${top.type}">
+      <div class="st108-copilot-row">
+        <span class="st108-copilot-title">🧭</span>
+        <span class="st108-copilot-text">${st106Esc(top.text)}</span>
       </div>
-      <div class="st107-copilot-strong">
-        建議優先處理：${all.find(i=>i.type==="danger")?.text || all.find(i=>i.type==="warn")?.text || "目前無需調整。"}
-      </div>
+      ${rest ? `<button type="button" class="st108-copilot-action" onclick="st107CarryRest()">↷ 其餘 ${rest} 個任務保留至下次</button>` : ""}
     </div>
   `;
 }
@@ -29194,13 +29227,53 @@ ST160_StateGuard.install();
       </section>
     `;
   }
+  /* 進入上課時，若現在已經比排定的開始時間晚 10 分鐘以上（例如課表 10:30、實際 16:40 才上），
+     就把今天的流程改成從現在開始計時，免得每個任務都顯示「超時好幾百分鐘」。
+     每堂課（每班、每天）只判斷一次；已經勾過任務就不動；下方提示可以復原。 */
+  const pad2 = n=>String(n).padStart(2,'0');
+  function alignStartToNow(){
+    let rec = null;
+    try{ rec = typeof lessonRecord === 'function' ? lessonRecord() : null; }catch(e){}
+    if(!rec || typeof st106Lesson !== 'function') return null;
+    const flow = st106Lesson();
+    if(!flow || flow.startAligned) return null;
+    const now = new Date();
+    const localToday = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}`;
+    const date = window.classContext?.date || (typeof classContext !== 'undefined' ? classContext?.date : '');
+    if(date && date !== localToday && date !== now.toISOString().slice(0,10)) return null; /* 補登過去的課不動 */
+    flow.startAligned = true;
+    const touched = (flow.tasks || []).some(t=>t && (t.done || t.status === 'done' || t.status === 'carry'));
+    const [h,m] = String(flow.startTime || '').split(':').map(Number);
+    const nowMin = now.getHours()*60 + now.getMinutes();
+    if(touched || !Number.isFinite(h) || nowMin - (h*60 + (m||0)) < 10){ try{ saveState(); }catch(e){} return null; }
+    const planned = flow.startTime;
+    flow.plannedStartTime = planned;
+    flow.startTime = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    try{ saveState(); }catch(e){}
+    return {planned, start:flow.startTime, flow};
+  }
+  function toastAligned(a){
+    try{
+      showToast(`已從現在 ${a.start} 開始計時（原定 ${a.planned}）`, {ms:7000, icon:'⏱️ ', actionLabel:'改回原定', onAction:()=>{
+        a.flow.startTime = a.planned;
+        try{ saveState(); }catch(e){}
+        renderShell();
+        showToast(`已改回 ${a.planned} 開始`, {icon:'↩️ '});
+      }});
+    }catch(e){}
+  }
+
   function renderShell(){
     /* 剛進入上課模式（畫面上還不是上課畫面）：不要沿用上次開著的學生面板 */
-    if(!document.querySelector('#app .v1529-shell')) window.__v1529.selectedSid = null;
+    const freshEntry = !document.querySelector('#app .v1529-shell');
+    if(freshEntry) window.__v1529.selectedSid = null;
     document.body.classList.add('start-class-mode');
     document.body.classList.add('v1529-clean-compact');
     document.body.classList.remove('v1528-compact-mode','v1528-drawer-mode','v1528-isolation-mode');
     try{ if(typeof prepareStartClassData === 'function') prepareStartClassData(); }catch(e){}
+    let aligned = null;
+    if(freshEntry){ try{ aligned = alignStartToNow(); }catch(e){} }
+    if(aligned) setTimeout(()=>toastAligned(aligned), 0);
     try{ if(typeof st106Timer !== 'undefined' && st106Timer){ clearTimeout(st106Timer); st106Timer = null; } }catch(e){}
 
     const c = cls();
