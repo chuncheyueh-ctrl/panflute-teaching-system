@@ -29166,7 +29166,7 @@ ST160_StateGuard.install();
     const tap = pointsMode ? `v1529CardTap('${esc(st.id)}')` : `v1529SelectStudent('${esc(st.id)}')`;
     return `
       <button type="button" class="v1529-card ${isSelected?'selected':''} ${off?'muted':''} ${pointsMode?'tap-points':''}" data-v1529-card="1" data-student-id="${esc(st.id)}" onclick="${tap}">
-        <span class="v1529-dot" style="background:${esc(att.color)}" title="${esc(att.label)}"></span>
+        <span class="v1529-att" role="button" style="--att:${esc(att.color)}" aria-label="${esc(st.name || '')}：${esc(att.label)}，點一下切換出席狀態" onclick="event.stopPropagation();v1529CycleAttendance('${esc(st.id)}')">${esc(att.label)}</span>
         ${pointsMode ? `<span class="v1529-more" role="button" aria-label="打開${esc(st.name || '')}的詳細面板" onclick="event.stopPropagation();v1529SelectStudent('${esc(st.id)}')">⋯</span>` : ''}
         <span class="v1529-avatar">${photo(st)}</span>
         <span class="v1529-name">${esc(st.name || '未命名')}</span>
@@ -29244,9 +29244,12 @@ ST160_StateGuard.install();
               <div class="v1529-student-head">
                 <div>
                   <h2>🧑‍🎓 學生名單</h2>
-                  <div class="v1529-hint">${pointsMode ? '點小卡直接 +1 點；按小卡左上角「⋯」打開詳細面板。' : '點學生小卡，打開角色詳細面板。'}</div>
+                  <div class="v1529-hint">${pointsMode ? '點小卡直接 +1 點；按小卡左上角「⋯」打開詳細面板。' : '點學生小卡，打開角色詳細面板。'}點右上角的出席狀態可以切換。</div>
                 </div>
-                <div class="badge">本堂學生：${list.length} 人</div>
+                <div class="v1529-head-right">
+                  <button type="button" class="btn primary v1529-allpresent" onclick="v1529AllPresent()">✅ 全班出席</button>
+                  <div class="badge">到課 ${list.filter(x=>['arrived','late'].includes(attUi(x.id))).length}／${list.length} 人</div>
+                </div>
               </div>
 
               <div class="v1529-mode">
@@ -29271,6 +29274,50 @@ ST160_StateGuard.install();
     `;
     if(keepSheet){ const ns = app.querySelector('.v1529-sheet'); if(ns) ns.scrollTop = keepSheet; }
   }
+
+  /* ---------- 出席 ---------- */
+  const ATT_CYCLE = ['none','arrived','late','leave','absent'];
+  function attUi(id){
+    try{ if(typeof st106AttendanceMeta === 'function'){ const m = st106AttendanceMeta(id); if(m && m.uiValue) return m.uiValue; } }catch(e){}
+    return attendanceValue(id);
+  }
+  /* 一次改很多人時，中途先不重畫，全部改完再畫一次（iPad 上才不會卡） */
+  function batchWithoutRender(fn){
+    const r = window.render, rs = window.renderStartClassMode;
+    window.render = function(){}; window.renderStartClassMode = function(){};
+    try{ fn(); }
+    finally{ window.render = r; window.renderStartClassMode = rs; }
+    window.renderStartClassMode();
+  }
+  function setManyAttendance(ids, value){
+    if(typeof st106SetAttendance !== 'function') return 0;
+    batchWithoutRender(()=>ids.forEach(id=>st106SetAttendance(id, value)));
+    return ids.length;
+  }
+  /* 全班出席：只改還沒點名的人，已標遲到／請假／缺席的不動；可以復原 */
+  window.v1529AllPresent = function(){
+    const list = students();
+    const ids = list.filter(st=>attUi(st.id) === 'none').map(st=>st.id);
+    if(!ids.length){ try{ showToast('全班都已經點過名了', {icon:'ℹ️ '}); }catch(e){} return {ok:true, changed:0}; }
+    setManyAttendance(ids, 'arrived');
+    const pt = Number(state?.settings?.attendPoint || 0);
+    try{
+      showToast(`已將 ${ids.length} 位設為出席${pt ? `（各 +${pt} 點）` : ''}`, {ms:6000, actionLabel:'復原', onAction:()=>{
+        const back = ids.filter(id=>attUi(id) === 'arrived');
+        setManyAttendance(back, 'none');
+        showToast(`已復原 ${back.length} 位的出席`, {icon:'↩️ '});
+      }});
+    }catch(e){}
+    return {ok:true, changed:ids.length};
+  };
+  /* 點小卡右上角的狀態：未到 → 出席 → 遲到 → 請假 → 缺席 → 未到 */
+  window.v1529CycleAttendance = function(sid){
+    if(typeof st106SetAttendance !== 'function') return {ok:false};
+    const cur = attUi(sid);
+    const next = ATT_CYCLE[(Math.max(0, ATT_CYCLE.indexOf(cur)) + 1) % ATT_CYCLE.length];
+    st106SetAttendance(sid, next);
+    return {ok:true, from:cur, to:next};
+  };
 
   /* 點數模式：點小卡直接 +1，小卡上跳出 +1，下方提示可以復原 */
   window.v1529CardTap = function(sid){
@@ -29399,7 +29446,12 @@ ST160_StateGuard.install();
     body.v1529-clean-compact .v1529-card{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:6px;min-height:168px;padding:14px 10px 10px;border:1px solid rgba(70,93,78,.15);border-radius:22px;background:rgba(255,255,255,.82);box-shadow:0 7px 18px rgba(30,50,40,.07);color:#1e2a23;text-align:center;cursor:pointer;appearance:none;-webkit-appearance:none;transition:border-color .12s ease, box-shadow .12s ease, transform .12s ease;contain:layout paint style;overflow:hidden;}
     body.v1529-clean-compact .v1529-card.selected{border:3px solid #243126;box-shadow:0 0 0 3px rgba(36,49,38,.08),0 10px 22px rgba(30,50,40,.12);}
     body.v1529-clean-compact .v1529-card.muted{filter:grayscale(.72);opacity:.55;}
-    body.v1529-clean-compact .v1529-dot{position:absolute;right:12px;top:12px;width:12px;height:12px;border-radius:999px;box-shadow:0 0 0 4px rgba(255,255,255,.9),0 2px 8px rgba(0,0,0,.2);}
+    body.v1529-clean-compact .v1529-att{position:absolute;right:6px;top:6px;min-width:44px;height:30px;padding:0 9px;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:900;color:#fff;background:var(--att,#9a9a9a);box-shadow:0 0 0 3px rgba(255,255,255,.9),0 2px 8px rgba(0,0,0,.18);z-index:2;}
+    body.v1529-clean-compact .v1529-card.muted .v1529-att{filter:none;}
+    body.v1529-clean-compact .v1529-head-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+    body.v1529-clean-compact .v1529-allpresent{padding:10px 16px;font-size:15px;white-space:nowrap;background:#25b45b !important;color:#fff !important;border:0;box-shadow:0 4px 12px rgba(37,180,91,.3);}
+    /* 小卡上方留位置給「⋯」與出席標籤，不壓到大頭貼 */
+    body.v1529-clean-compact .v1529-card{padding-top:40px;}
     body.v1529-clean-compact .v1529-avatar{width:74px;height:74px;border-radius:20px;background:#e9ead7;display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 74px;border:3px solid rgba(115,158,122,.28);}
     body.v1529-clean-compact .v1529-avatar-img{width:100%;height:100%;object-fit:cover;display:block;}
     body.v1529-clean-compact .v1529-avatar-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:38px;}
@@ -29446,7 +29498,7 @@ ST160_StateGuard.install();
       body.v1529-clean-compact .v1529-left{order:2;}
       body.v1529-clean-compact .v1529-main{order:1;}
       body.v1529-clean-compact .v1529-grid{grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px;}
-      body.v1529-clean-compact .v1529-card{min-height:150px;border-radius:20px;padding:12px 8px 9px;}
+      body.v1529-clean-compact .v1529-card{min-height:150px;border-radius:20px;padding:38px 8px 9px;}
       body.v1529-clean-compact .v1529-avatar{width:64px;height:64px;flex-basis:64px;}
       body.v1529-clean-compact .v1529-name{font-size:16px;}
       body.v1529-clean-compact .v1529-mage{font-size:10px;}
