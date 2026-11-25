@@ -1,0 +1,22 @@
+import {start,device} from "./lib.mjs"; const done=await start(); setTimeout(()=>{console.log("TIMEOUT");done(1)},120000);
+let fail=0;const ok=(n,c,x="")=>{console.log(c?"PASS":"FAIL",n,c?"":JSON.stringify(x));if(!c)fail++};
+const d=await device("new.html",{w:1024,h:768});const ev=d.ev;
+await ev(`hideDeviceLockWarning?.();window.__al=[];window.alert=m=>__al.push(String(m));return 1`);
+await ev(`await firebaseDb.ref("battleSystem/sessionLock").set(null);return 1`).catch(()=>{});
+await ev(`addPoints(state.students[0].id,1,"測");await guardedFirebaseUpload(false);await new Promise(r=>setTimeout(r,300));return 1`);
+let r=JSON.parse(await ev(`return JSON.stringify({al:__al,t:[...document.querySelectorAll(".bt-toast")].map(x=>x.innerText)})`));console.log(r);
+ok("上傳成功不跳彈窗",r.al.length===0,r.al);ok("顯示小提示",r.t.some(x=>x.includes("雲端上傳成功")),r.t);
+await d.shot("toast");
+const pos=JSON.parse(await ev(`const b=document.querySelector(".bt-toast").getBoundingClientRect();return JSON.stringify({top:b.top,w:b.width,vis:getComputedStyle(document.querySelector(".bt-toast")).opacity})`));console.log(pos);ok("在畫面上",pos.top>600&&pos.top<768&&pos.w>50);
+for(let i=0;i<5;i++)await ev(`showToast("第${i}個");return 1`);
+ok("最多疊 3 個",await ev(`return document.querySelectorAll(".bt-toast").length`)===3);
+await ev(`document.querySelector(".bt-toast").click();await new Promise(r=>setTimeout(r,400));return 1`);
+ok("點一下關掉",await ev(`return document.querySelectorAll(".bt-toast").length`)===2);
+await new Promise(r=>setTimeout(r,6500));
+ok("自動消失",await ev(`return document.querySelectorAll(".bt-toast").length`)===0);
+await ev(`RewardCore?.redeem && 1;return 1`);
+// 錯誤仍是彈窗
+await ev(`__al=[];setAcademicTermAdd?.();return 1`).catch(()=>{});
+await ev(`__al=[];window.RewardCore&&RewardCore.redeem&&RewardCore.redeem("nope","nope");return 1`).catch(()=>{});
+console.log("err alerts",await ev(`return JSON.stringify(__al)`));
+console.log("errs",d.errs,"fails",fail);done(0);

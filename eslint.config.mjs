@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 瀏覽器端對端測試（純 Node 腳本，不屬於 Next.js 程式）
+    "tests/e2e/**",
   ]),
 ]);
 

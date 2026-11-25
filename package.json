@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "check:syntax": "node tests/e2e/syntax.mjs"
   },
   "dependencies": {
     "next": "16.3.4",

@@ -1,0 +1,5 @@
+import {start,device,sleep} from "./lib.mjs"; const done=await start();
+for(const [n,w,h] of [["wide",1800,1000],["ipad",820,1180]]){const d=await device("new.html",{w,h});await d.ev(`hideDeviceLockWarning();V15341RouteTo("classroom");classContext.schoolId=state.schools[0].id;classContext.classId=state.classes[0].id;classContext.__manualOverride=true;classroomTab="notes";render();await new Promise(r=>setTimeout(r,1500));hideDeviceLockWarning();document.getElementById("lessonSyncStatus").scrollIntoView({block:"start"});window.scrollBy(0,-200)`);await sleep(500);
+console.log(n,await d.ev(`const g=()=>document.getElementById("lessonSyncStatus").offsetHeight;const a=g();window.dispatchEvent(new Event("x"));return a+" "+document.getElementById("lessonSyncStatus").innerText`));await d.shot("st-"+n);
+await d.offline(true);await d.ev(`const e=document.getElementById("lessonWeeklyTitle");e.value="q";e.dispatchEvent(new Event("input",{bubbles:true}))`);await sleep(2500);console.log(n,"offline",await d.ev(`const e=document.getElementById("lessonSyncStatus");return e.offsetHeight+" "+e.innerText`));await d.offline(false);await d.close()}
+done(0)
