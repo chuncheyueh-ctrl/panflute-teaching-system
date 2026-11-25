@@ -29233,30 +29233,139 @@ ST160_StateGuard.install();
       </section>
     `;
   }
-  /* 進入上課時，若現在已經比排定的開始時間晚 10 分鐘以上（例如課表 10:30、實際 16:40 才上），
-     就把今天的流程改成從現在開始計時，免得每個任務都顯示「超時好幾百分鐘」。
-     每堂課（每班、每天）只判斷一次；已經勾過任務就不動；下方提示可以復原。 */
+  /* 依課表判斷今天這堂課的狀態（只看今天的課；補登過去的課不動）：
+     - offday：這個班有排課表，但今天不是上課日 → 流程先不計時，等老師按「開始上課」
+     - before：今天有課但還沒到時間 → 流程停在課表時間，可以提前開始
+     - scheduled：已過上課時間 → 照課表時間；晚 10 分鐘以上才進來就自動對準現在
+     - unscheduled：這個班沒有設定課表 → 用流程裡的開始時間，晚 10 分鐘以上自動對準
+     - normal：老師已經自己開始或改過開始時間，或不是今天的課 */
   const pad2 = n=>String(n).padStart(2,'0');
-  function alignStartToNow(){
-    let rec = null;
-    try{ rec = typeof lessonRecord === 'function' ? lessonRecord() : null; }catch(e){}
-    if(!rec || typeof st106Lesson !== 'function') return null;
-    const flow = st106Lesson();
-    if(!flow || flow.startAligned) return null;
+  const hm = d=>`${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const toMin = t=>{ const [h,m] = String(t||'').split(':').map(Number); return Number.isFinite(h) ? h*60 + (m||0) : NaN; };
+  const WEEK = ['日','一','二','三','四','五','六'];
+  function ctxNow(){
+    const c = window.classContext || (typeof classContext !== 'undefined' ? classContext : {}) || {};
     const now = new Date();
     const localToday = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}`;
-    const date = window.classContext?.date || (typeof classContext !== 'undefined' ? classContext?.date : '');
-    if(date && date !== localToday && date !== now.toISOString().slice(0,10)) return null; /* 補登過去的課不動 */
+    const isToday = !c.date || c.date === localToday || c.date === now.toISOString().slice(0,10);
+    return {c, now, isToday};
+  }
+  function classScheduleList(c){
+    try{
+      return (typeof ensureClassSchedule === 'function' ? ensureClassSchedule() : [])
+        .filter(e=>e && e.active !== false && e.startTime && String(e.classId) === String(c.classId))
+        .sort((x,y)=>(Number(x.dayOfWeek)-Number(y.dayOfWeek)) || String(x.startTime).localeCompare(String(y.startTime)));
+    }catch(e){ return []; }
+  }
+  const touchedTasks = flow=>(flow.tasks || []).some(t=>t && (t.done || t.status === 'done' || t.status === 'carry'));
+  function lessonPhase(){
+    let rec = null;
+    try{ rec = typeof lessonRecord === 'function' ? lessonRecord() : null; }catch(e){}
+    if(!rec || typeof st106Lesson !== 'function') return {phase:'normal'};
+    const flow = st106Lesson();
+    const {c, now, isToday} = ctxNow();
+    if(!flow || !isToday || flow.manualStart) return {phase:'normal', flow};
+    const list = classScheduleList(c);
+    if(!list.length) return {phase:'unscheduled', flow};
+    const today = list.filter(e=>Number(e.dayOfWeek) === now.getDay());
+    if(!today.length) return {phase:'offday', flow, list};
+    const nowHM = hm(now);
+    const entry = today.find(e=>!e.endTime || nowHM < e.endTime) || today[today.length-1];
+    const free = !touchedTasks(flow);
+    if(nowHM < entry.startTime){
+      /* 還沒上課：時間軸固定在課表時間（之前若被誤判成已開始，也改回來） */
+      if(free && (flow.startTime !== entry.startTime || flow.startAligned)){
+        flow.startTime = entry.startTime; delete flow.startAligned; delete flow.plannedStartTime;
+        try{ saveState(); }catch(e){}
+      }
+      return {phase:'before', flow, entry};
+    }
+    if(free && !flow.startAligned && flow.startTime !== entry.startTime){
+      flow.startTime = entry.startTime;
+      try{ saveState(); }catch(e){}
+    }
+    return {phase:'scheduled', flow, entry};
+  }
+  /* 已過上課時間 10 分鐘以上才進來：從現在開始計時（每堂課只判斷一次；勾過任務就不動；可改回） */
+  function alignStartToNow(info){
+    const flow = info.flow;
+    if(!flow || flow.startAligned || (info.phase !== 'scheduled' && info.phase !== 'unscheduled')) return null;
     flow.startAligned = true;
-    const touched = (flow.tasks || []).some(t=>t && (t.done || t.status === 'done' || t.status === 'carry'));
-    const [h,m] = String(flow.startTime || '').split(':').map(Number);
-    const nowMin = now.getHours()*60 + now.getMinutes();
-    if(touched || !Number.isFinite(h) || nowMin - (h*60 + (m||0)) < 10){ try{ saveState(); }catch(e){} return null; }
+    const now = new Date();
+    const start = toMin(flow.startTime);
+    if(touchedTasks(flow) || !Number.isFinite(start) || (now.getHours()*60 + now.getMinutes()) - start < 10){ try{ saveState(); }catch(e){} return null; }
     const planned = flow.startTime;
     flow.plannedStartTime = planned;
-    flow.startTime = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    flow.startTime = hm(now);
     try{ saveState(); }catch(e){}
     return {planned, start:flow.startTime, flow};
+  }
+  function phaseBannerHtml(info){
+    if(info.phase === 'before'){
+      const left = toMin(info.entry.startTime) - (new Date().getHours()*60 + new Date().getMinutes());
+      const leftText = left >= 60 ? `${Math.floor(left/60)} 小時${left%60 ? ` ${left%60} 分鐘` : ''}` : `${left} 分鐘`;
+      return `<div class="v1529-phase" data-phase="before"><div>⏰ 還沒到上課時間：今天 ${esc(info.entry.startTime)} 開始（還有 ${leftText}）</div>
+        <button type="button" class="btn primary" onclick="v1529StartLessonNow()">提前開始上課</button></div>`;
+    }
+    if(info.phase === 'offday'){
+      const when = info.list.map(e=>`星期${WEEK[Number(e.dayOfWeek)] || '?'} ${e.startTime}${e.endTime ? '–' + e.endTime : ''}`).join('、');
+      return `<div class="v1529-phase" data-phase="offday"><div>📅 今天不是這個班的上課日（課表：${esc(when)}），流程先不計時。</div>
+        <button type="button" class="btn primary" onclick="v1529StartLessonNow()">開始上課（補課／臨時課）</button></div>`;
+    }
+    return '';
+  }
+  /* 今天不是上課日：只列出流程，不顯示時間與超時 */
+  function pausedFlowHtml(){
+    const tasks = typeof st106Tasks === 'function' ? st106Tasks() : [];
+    return `<h2>📅 今日課堂</h2><h3>本堂流程</h3>
+      <div class="st106-flow v1529-paused-flow">${tasks.map(t=>`
+        <div class="st106-task"><span class="st106-status-btn pending">○</span>
+          <div><div class="st106-task-title">${esc(t.title || '未命名任務')} <span class="st106-badge">${Number(t.minutes)||0} 分鐘</span></div>
+          <div class="st106-task-meta">尚未開始</div></div></div>`).join('')}
+      </div>`;
+  }
+  window.v1529StartLessonNow = function(){
+    if(typeof st106Lesson !== 'function') return {ok:false};
+    const flow = st106Lesson();
+    const prev = {startTime:flow.startTime, manualStart:flow.manualStart, startAligned:flow.startAligned};
+    flow.startTime = hm(new Date());
+    flow.manualStart = true;
+    flow.startAligned = true;
+    try{ saveState(); }catch(e){}
+    renderShell();
+    try{
+      showToast(`已從現在 ${flow.startTime} 開始計時`, {ms:6000, icon:'⏱️ ', actionLabel:'復原', onAction:()=>{
+        Object.assign(flow, prev);
+        if(prev.manualStart === undefined) delete flow.manualStart;
+        if(prev.startAligned === undefined) delete flow.startAligned;
+        try{ saveState(); }catch(e){}
+        renderShell();
+      }});
+    }catch(e){}
+    return {ok:true, startTime:flow.startTime};
+  };
+  /* 老師自己改「上課開始時間」：視為已開始，之後不再依課表或自動對準改動 */
+  const oldSetStart = typeof window.st106SetStartTime === 'function' ? window.st106SetStartTime : null;
+  if(oldSetStart && !oldSetStart.__v1529Wrapped){
+    const wrappedSetStart = function(v){
+      try{ const f = st106Lesson(); f.manualStart = true; f.startAligned = true; }catch(e){}
+      return oldSetStart.apply(this, arguments);
+    };
+    wrappedSetStart.__v1529Wrapped = true;
+    window.st106SetStartTime = wrappedSetStart;
+    try{ st106SetStartTime = wrappedSetStart; }catch(e){}
+  }
+  /* 「還沒到上課時間」時，到點自動重畫一次，提示會消失、時間軸開始走 */
+  let phaseTimer = null;
+  function schedulePhaseRefresh(info){
+    if(phaseTimer){ clearTimeout(phaseTimer); phaseTimer = null; }
+    if(info.phase !== 'before') return;
+    const now = new Date();
+    const ms = (toMin(info.entry.startTime) - (now.getHours()*60 + now.getMinutes()))*60000 - now.getSeconds()*1000 + 500;
+    if(ms > 0 && ms < 12*3600000) phaseTimer = setTimeout(()=>{
+      phaseTimer = null;
+      if(document.querySelector('#app .v1529-shell')) renderShell();
+    }, ms);
   }
   function toastAligned(a){
     try{
@@ -29277,8 +29386,11 @@ ST160_StateGuard.install();
     document.body.classList.add('v1529-clean-compact');
     document.body.classList.remove('v1528-compact-mode','v1528-drawer-mode','v1528-isolation-mode');
     try{ if(typeof prepareStartClassData === 'function') prepareStartClassData(); }catch(e){}
+    let phaseInfo = {phase:'normal'};
+    try{ phaseInfo = lessonPhase(); }catch(e){}
+    schedulePhaseRefresh(phaseInfo);
     let aligned = null;
-    if(freshEntry){ try{ aligned = alignStartToNow(); }catch(e){} }
+    if(freshEntry){ try{ aligned = alignStartToNow(phaseInfo); }catch(e){} }
     if(aligned) setTimeout(()=>toastAligned(aligned), 0);
     try{ if(typeof st106Timer !== 'undefined' && st106Timer){ clearTimeout(st106Timer); st106Timer = null; } }catch(e){}
 
@@ -29310,10 +29422,11 @@ ST160_StateGuard.install();
           </div>
         </div>
 
+        ${phaseBannerHtml(phaseInfo)}
         <div class="v1529-layout">
           <aside class="v1529-left">
             <section class="v1529-panel">
-              ${typeof st106Flow === 'function' ? st106Flow() : ''}
+              ${phaseInfo.phase === 'offday' ? pausedFlowHtml() : (typeof st106Flow === 'function' ? st106Flow() : '')}
               ${typeof st106Notes === 'function' ? st106Notes() : ''}
             </section>
           </aside>
@@ -29569,6 +29682,11 @@ ST160_StateGuard.install();
     body.v1529-clean-compact .st120-task-attr-picker{padding:10px 12px;}
     body.v1529-clean-compact .st107-toolbar{display:flex !important;flex-wrap:wrap;gap:6px;}
     body.v1529-clean-compact .st107-toolbar button{width:auto !important;flex:1 1 auto;margin:0 !important;padding:8px 10px;font-size:13px;}
+    /* 依課表的上課狀態提示（還沒到時間／今天不是上課日） */
+    body.v1529-clean-compact .v1529-phase{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:12px 16px;border-radius:18px;background:#fff4cc;border:1px solid rgba(212,160,23,.4);color:#5e4500;font-weight:850;font-size:16px;}
+    body.v1529-clean-compact .v1529-phase .btn{width:auto !important;white-space:nowrap;padding:10px 16px;font-size:15px;background:#25b45b !important;color:#fff !important;border:0;box-shadow:0 4px 12px rgba(37,180,91,.3);}
+    body.dark-mode.v1529-clean-compact .v1529-phase{background:#3a3218;color:#ffe9a8;}
+    body.v1529-clean-compact .v1529-paused-flow .st106-task{opacity:.85;}
     /* 角色詳細面板：下方滑出的面板 */
     body.v1529-clean-compact .v1529-sheet-backdrop{position:fixed;inset:0;background:rgba(20,30,24,.38);z-index:10040;animation:v1529Fade .18s ease;}
     body.v1529-clean-compact .v1529-drawer.v1529-sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(1080px,calc(100vw - 24px));max-height:84vh;margin:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;z-index:10050;background:#fffdf6;border-radius:26px 26px 0 0;padding:0 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px rgba(20,30,24,.25);animation:v1529Up .22s ease;}
