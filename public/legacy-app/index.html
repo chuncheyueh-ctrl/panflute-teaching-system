@@ -6472,6 +6472,8 @@ function btAttendanceRecord(studentId, classId, date){
 /* 成功訊息用不擋畫面的小提示，幾秒後自動消失；點一下也可以關掉。
    錯誤、警告、需要使用者讀完的說明仍然用 alert。 */
 function showToast(msg, ms){
+  const opt = (ms && typeof ms === "object") ? ms : {ms};
+  ms = opt.ms;
   try{
     let box = document.getElementById("btToastBox");
     if(!box){
@@ -6481,6 +6483,8 @@ function showToast(msg, ms){
         s.textContent = `#btToastBox{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:2147483000;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;width:max-content;max-width:calc(100vw - 32px)}
 .bt-toast{pointer-events:auto;background:#1f7a4d;color:#fff;font-size:16px;font-weight:700;line-height:1.4;padding:10px 18px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.22);white-space:pre-line;text-align:center;cursor:pointer;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s}
 .bt-toast.show{opacity:1;transform:none}
+.bt-toast:has(.bt-toast-action){display:flex;align-items:center;white-space:nowrap}
+.bt-toast-action{flex:0 0 auto;width:auto !important;min-width:0;margin:0 0 0 12px;border:0;border-radius:999px;padding:4px 12px;background:#fff;color:#1f7a4d;font-weight:900;font-size:14px;cursor:pointer}
 @media(max-width:720px){#btToastBox{bottom:auto;top:14px}}
 @media print{#btToastBox{display:none}}`;
         document.head.appendChild(s);
@@ -6493,9 +6497,17 @@ function showToast(msg, ms){
     }
     const t = document.createElement("div");
     t.className = "bt-toast";
-    t.textContent = "✅ " + String(msg ?? "").replace(/^\s*(✅|🔥)\s*/, "");
+    t.textContent = (opt.icon ?? "✅ ") + String(msg ?? "").replace(/^\s*(✅|🔥)\s*/, "");
     const close = ()=>{ t.classList.remove("show"); setTimeout(()=>t.remove(), 250); };
     t.onclick = close;
+    if(opt.actionLabel && typeof opt.onAction === "function"){
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "bt-toast-action";
+      b.textContent = opt.actionLabel;
+      b.onclick = e=>{ e.stopPropagation(); close(); try{ opt.onAction(); }catch(err){ console.error(err); } };
+      t.appendChild(b);
+    }
     box.appendChild(t);
     while(box.children.length > 3) box.firstChild.remove();
     requestAnimationFrame(()=>t.classList.add("show"));
@@ -8934,7 +8946,8 @@ function enterStartClassMode(){
 
 function exitStartClassMode(){
   startClassMode = false;
-  document.body.classList.remove("start-class-mode");
+  document.body.classList.remove("start-class-mode","v1529-sheet-open");
+  if(window.__v1529) window.__v1529.selectedSid = null;
   render();
 }
 
@@ -29149,9 +29162,12 @@ ST160_StateGuard.install();
     const mage = mageProfile(st);
     const isSelected = window.__v1529.selectedSid === st.id;
     const off = ['absent','leave','none'].includes(attendanceValue(st.id));
+    const pointsMode = window.st106Mode === 'points';
+    const tap = pointsMode ? `v1529CardTap('${esc(st.id)}')` : `v1529SelectStudent('${esc(st.id)}')`;
     return `
-      <button type="button" class="v1529-card ${isSelected?'selected':''} ${off?'muted':''}" data-v1529-card="1" data-student-id="${esc(st.id)}" onclick="v1529SelectStudent('${esc(st.id)}')">
+      <button type="button" class="v1529-card ${isSelected?'selected':''} ${off?'muted':''} ${pointsMode?'tap-points':''}" data-v1529-card="1" data-student-id="${esc(st.id)}" onclick="${tap}">
         <span class="v1529-dot" style="background:${esc(att.color)}" title="${esc(att.label)}"></span>
+        ${pointsMode ? `<span class="v1529-more" role="button" aria-label="打開${esc(st.name || '')}的詳細面板" onclick="event.stopPropagation();v1529SelectStudent('${esc(st.id)}')">⋯</span>` : ''}
         <span class="v1529-avatar">${photo(st)}</span>
         <span class="v1529-name">${esc(st.name || '未命名')}</span>
         <span class="v1529-mage"><span>${mage.emoji}</span><span>${esc(mage.name)} Lv.${mage.level}</span></span>
@@ -29162,23 +29178,25 @@ ST160_StateGuard.install();
   function drawerHtml(list){
     const sid = window.__v1529.selectedSid;
     const st = list.find(s=>s.id===sid) || null;
-    if(!st){
-      return `<section class="v1529-drawer empty" data-v1529-drawer="1"><div class="v1529-drawer-title">角色詳細面板</div><div class="note">點選學生小卡後，這裡會顯示加分、點數與成長紀錄。</div></section>`;
-    }
+    if(!st) return '';
     let inner = '';
     try{ inner = (typeof st106StudentCard === 'function') ? st106StudentCard(st) : `<div class="note">找不到學生詳細卡片 renderer。</div>`; }
     catch(e){ inner = `<div class="note">詳細面板產生失敗：${esc(e.message || e)}</div>`; }
+    /* 從畫面下方滑出、蓋在名單上，不用往下捲；點旁邊暗處或「收合」關閉 */
     return `
-      <section class="v1529-drawer" data-v1529-drawer="1">
+      <div class="v1529-sheet-backdrop" onclick="v1529ClearSelection()"></div>
+      <section class="v1529-drawer v1529-sheet" data-v1529-drawer="1" data-sid="${esc(st.id)}" role="dialog" aria-label="${esc(st.name)} 的角色詳細面板">
         <div class="v1529-drawer-head">
-          <div class="v1529-drawer-title">角色詳細面板：${esc(st.name)}</div>
-          <button type="button" class="btn gold" onclick="v1529ClearSelection()">收合</button>
+          <div class="v1529-drawer-title">${esc(st.name)}</div>
+          <button type="button" class="btn gold" onclick="v1529ClearSelection()">✕ 收合</button>
         </div>
         <div class="v1529-detail-wrap">${inner}</div>
       </section>
     `;
   }
   function renderShell(){
+    /* 剛進入上課模式（畫面上還不是上課畫面）：不要沿用上次開著的學生面板 */
+    if(!document.querySelector('#app .v1529-shell')) window.__v1529.selectedSid = null;
     document.body.classList.add('start-class-mode');
     document.body.classList.add('v1529-clean-compact');
     document.body.classList.remove('v1528-compact-mode','v1528-drawer-mode','v1528-isolation-mode');
@@ -29195,6 +29213,11 @@ ST160_StateGuard.install();
 
     const app = document.getElementById('app');
     if(!app) return;
+    /* 重畫時保留面板捲動位置（在面板底部按 +3 點後不會跳回最上面） */
+    const oldSheet = app.querySelector('.v1529-sheet');
+    const keepSheet = oldSheet && oldSheet.dataset.sid === window.__v1529.selectedSid ? oldSheet.scrollTop : 0;
+    document.body.classList.toggle('v1529-sheet-open', !!(window.__v1529.selectedSid && list.some(x=>x.id === window.__v1529.selectedSid)));
+    const pointsMode = window.st106Mode === 'points';
     app.innerHTML = `
       <div class="v1529-shell">
         <div class="v1529-header">
@@ -29221,7 +29244,7 @@ ST160_StateGuard.install();
               <div class="v1529-student-head">
                 <div>
                   <h2>🧑‍🎓 學生名單</h2>
-                  <div class="v1529-hint">小卡固定顯示；點選學生後，下方開啟角色詳細面板。</div>
+                  <div class="v1529-hint">${pointsMode ? '點小卡直接 +1 點；按小卡左上角「⋯」打開詳細面板。' : '點學生小卡，打開角色詳細面板。'}</div>
                 </div>
                 <div class="badge">本堂學生：${list.length} 人</div>
               </div>
@@ -29246,7 +29269,34 @@ ST160_StateGuard.install();
         </div>
       </div>
     `;
+    if(keepSheet){ const ns = app.querySelector('.v1529-sheet'); if(ns) ns.scrollTop = keepSheet; }
   }
+
+  /* 點數模式：點小卡直接 +1，小卡上跳出 +1，下方提示可以復原 */
+  window.v1529CardTap = function(sid){
+    const st = students().find(s=>s.id === sid);
+    if(!st || typeof st106AddPoints !== 'function') return {ok:false};
+    st106AddPoints(sid, 1);
+    const cardEl = [...document.querySelectorAll('[data-v1529-card]')].find(el=>el.dataset.studentId === sid);
+    if(cardEl){
+      const f = document.createElement('span');
+      f.className = 'v1529-float';
+      f.textContent = '+1';
+      cardEl.appendChild(f);
+      setTimeout(()=>f.remove(), 900);
+    }
+    try{
+      showToast(`${st.name} +1 點`, {icon:'🎁 ', ms:4000, actionLabel:'復原', onAction:()=>{
+        st106AddPoints(sid, -1);
+        showToast(`已復原：${st.name} −1 點`, {icon:'↩️ '});
+      }});
+    }catch(e){}
+    return {ok:true};
+  };
+
+  document.addEventListener('keydown', e=>{
+    if(e.key === 'Escape' && window.__v1529?.selectedSid && document.body.classList.contains('v1529-clean-compact')) window.v1529ClearSelection();
+  });
 
   window.v1529SelectStudent = function(sid){
     window.__v1529.selectedSid = (window.__v1529.selectedSid === sid) ? null : sid;
@@ -29260,6 +29310,7 @@ ST160_StateGuard.install();
     const wrappedExit = function(){
       document.body.classList.remove('v1529-clean-compact');
       window.__v1529.selectedSid = null;
+      document.body.classList.remove('v1529-sheet-open');
       try{ if(typeof st106Timer !== 'undefined' && st106Timer){ clearTimeout(st106Timer); st106Timer = null; } }catch(e){}
       return oldExit.apply(this, arguments);
     };
@@ -29362,6 +29413,31 @@ ST160_StateGuard.install();
     body.v1529-clean-compact .v1529-drawer-title{font-size:20px;font-weight:950;}
     body.v1529-clean-compact .v1529-detail-wrap .st106-card{margin:0;max-width:none;}
     body.v1529-clean-compact .v1529-bottom{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;justify-content:flex-end;}
+    /* 角色詳細面板：下方滑出的面板 */
+    body.v1529-clean-compact .v1529-sheet-backdrop{position:fixed;inset:0;background:rgba(20,30,24,.38);z-index:10040;animation:v1529Fade .18s ease;}
+    body.v1529-clean-compact .v1529-drawer.v1529-sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(1080px,calc(100vw - 24px));max-height:84vh;margin:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;z-index:10050;background:#fffdf6;border-radius:26px 26px 0 0;padding:0 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px rgba(20,30,24,.25);animation:v1529Up .22s ease;}
+    body.v1529-clean-compact .v1529-sheet .v1529-drawer-head{position:sticky;top:0;z-index:2;background:inherit;margin:0 -16px 12px;padding:14px 16px 10px;border-bottom:1px solid rgba(70,93,78,.12);}
+    body.v1529-clean-compact .v1529-sheet .v1529-drawer-head::before{content:"";position:absolute;left:50%;top:6px;width:44px;height:5px;border-radius:9px;background:rgba(70,93,78,.25);transform:translateX(-50%);}
+    body.v1529-clean-compact .v1529-sheet .v1529-drawer-head .btn{padding:10px 18px;font-size:16px;}
+    body.dark-mode.v1529-clean-compact .v1529-drawer.v1529-sheet{background:#1f2622;color:#eef3ee;}
+    body.v1529-clean-compact.v1529-sheet-open{overflow:hidden;}
+    @keyframes v1529Up{from{transform:translate(-50%,40px);opacity:.4}to{transform:translate(-50%,0);opacity:1}}
+    @keyframes v1529Fade{from{opacity:0}to{opacity:1}}
+    /* 點數模式小卡 */
+    body.v1529-clean-compact .v1529-card.tap-points:active{transform:scale(.96);}
+    body.v1529-clean-compact .v1529-more{position:absolute;left:6px;top:6px;width:34px;height:34px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;line-height:1;color:#35483d;background:rgba(232,236,232,.95);z-index:1;}
+    body.v1529-clean-compact .v1529-float{position:absolute;left:50%;top:38%;transform:translate(-50%,0);font-size:30px;font-weight:950;color:#d5ad33;text-shadow:0 2px 0 #fff,0 4px 12px rgba(0,0,0,.18);pointer-events:none;animation:v1529Float .9s ease-out forwards;}
+    @keyframes v1529Float{from{opacity:1;transform:translate(-50%,0) scale(.8)}30%{transform:translate(-50%,-14px) scale(1.15)}to{opacity:0;transform:translate(-50%,-46px) scale(1)}}
+    /* 上課模式：上面已經有自己的「深色」按鈕，隱藏全域那顆（原本會擋住「退出」） */
+    body.v1529-clean-compact #themeToggleBtn{display:none !important;}
+    /* 同步列縮小、放在標題列中間，跟著頁面捲走，不再蓋住學生小卡 */
+    body.v1529-clean-compact #syncStatusBar.sync-status{position:absolute !important;top:26px !important;bottom:auto !important;left:50% !important;right:auto !important;transform:translateX(-50%);max-width:calc(100vw - 420px);padding:7px 10px;font-size:12px;flex-wrap:nowrap;z-index:50;}
+    body.v1529-clean-compact #syncStatusBar.sync-status > span:nth-child(2),
+    body.v1529-clean-compact #syncStatusBar .sync-pending,
+    body.v1529-clean-compact #syncStatusBar .sync-actions button:not(:first-child){display:none !important;}
+    @media (max-width:720px){
+      body.v1529-clean-compact #syncStatusBar.sync-status{position:static !important;transform:none;max-width:none;margin:0 12px 8px;justify-content:center;}
+    }
     body.v1529-clean-compact [class*="v1528"],
     body.v1529-clean-compact .compact-battle-card{display:none!important;}
     @media (max-width:900px){
