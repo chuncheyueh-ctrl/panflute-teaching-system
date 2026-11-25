@@ -57,7 +57,23 @@ const r5=await look();ok("已勾過任務就不動",r5.start===late&&!r5.toast.i
 await ev(`await __prep(${JSON.stringify(hhmm(nowMin-5))});return 1`);
 const r6=await look();ok("只晚 5 分鐘不動",r6.start===hhmm(nowMin-5)&&!r6.toast.includes("開始計時"),r6);
 
-// 6. 重新整理後保留對準結果
+// 6. 版面：任務清單在最上面，屬性與工具改成一排小按鈕；局部重畫後順序不變
+const lay=async()=>JSON.parse(await ev(`const p=document.querySelector(".v1529-left .v1529-panel");const y=sel=>{const e=p.querySelector(":scope > "+sel);return e?Math.round(e.getBoundingClientRect().top):null};
+const btns=[...p.querySelectorAll(".st120-attr-btn")].map(b=>b.getBoundingClientRect());const tb=[...p.querySelectorAll(".st107-toolbar button")].map(b=>b.getBoundingClientRect());const pw=p.getBoundingClientRect().width;
+return JSON.stringify({flow:y(".st106-flow"),copilot:y(".st1064-copilot"),attr:y(".st120-task-attr-picker"),quest:y(".st120-quest-box"),time:y(".st106-time-row"),toolbar:y(".st107-toolbar"),notes:y(".st106-note-box"),
+ attrRows:new Set(btns.map(b=>Math.round(b.top))).size,attrMaxW:Math.max(...btns.map(b=>b.width))/pw,tbRows:new Set(tb.map(b=>Math.round(b.top))).size,n:btns.length})`));
+const chk=(L,tag)=>{const seq=[L.flow,L.copilot,L.attr,L.quest,L.time,L.toolbar];
+ ok(tag+"：任務清單→副駕駛→屬性→任務說明→開始時間→工具",seq.every(v=>v!=null)&&seq.every((v,i)=>!i||v>seq[i-1]),L);
+ ok(tag+"：屬性按鈕是一排小按鈕",L.n===6&&L.attrRows<=2&&L.attrMaxW<0.4,L);
+ ok(tag+"：投影/亮點牆/Replay 排成一排",L.tbRows===1,L);};
+await ev(`await __prep(${JSON.stringify(late)});return 1`);
+chk(await lay(),"橫向");
+const rf=JSON.parse(await ev(`st116RefreshFlowOnly();await new Promise(r=>setTimeout(r,300));return JSON.stringify({students:!!document.querySelector(".v1529-students-panel"),notes:!!document.querySelector(".v1529-left .st106-note-box")})`));
+ok("局部重畫不會蓋掉學生名單與備註",rf.students&&rf.notes,rf);
+chk(await lay(),"局部重畫後");
+await d.shot("tl-layout");
+
+// 7. 重新整理後保留對準結果
 await ev(`await __prep(${JSON.stringify(late)});await new Promise(r=>setTimeout(r,600));return 1`);
 const s1=(await look()).start;
 await d.go();

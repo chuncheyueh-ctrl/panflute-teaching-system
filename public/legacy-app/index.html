@@ -20210,6 +20210,12 @@ const ST131_TaskRenderer = {
   },
   fullRefresh(){
     if(!document.body.classList.contains("start-class-mode")) return false;
+    /* 新版上課畫面：整個重畫（只換左側會把課堂備註弄掉；舊的 findLeftContainer
+       只看前 500 字，會誤選到整個畫面，把學生名單一起蓋掉） */
+    if(document.querySelector("#app .v1529-shell") && typeof renderStartClassMode === "function"){
+      renderStartClassMode();
+      return true;
+    }
     const box = this.findLeftContainer();
     if(!box) return false;
     const oldScroll = box.scrollTop;
@@ -29538,6 +29544,31 @@ ST160_StateGuard.install();
     body.v1529-clean-compact .v1529-drawer-title{font-size:20px;font-weight:950;}
     body.v1529-clean-compact .v1529-detail-wrap .st106-card{margin:0;max-width:none;}
     body.v1529-clean-compact .v1529-bottom{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;justify-content:flex-end;}
+    /* 左側「今日課堂」：上課中最常用的任務清單放最上面，設定與工具放下面。
+       用 order 排，不動各版本產生的 HTML（多層外掛會用字串比對插入內容）。 */
+    body.v1529-clean-compact .v1529-left .v1529-panel{display:flex;flex-direction:column;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > *{order:50;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > h2{order:0;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-carry-panel{order:1;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > h3{order:2;margin-bottom:6px;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-progress-head{order:3;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-progress{order:4;margin-bottom:10px;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-flow{order:5;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-completion{order:6;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st1064-copilot{order:7;margin-top:12px;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st120-task-attr-picker{order:8;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st120-quest-box{order:9;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-time-row{order:20;margin-top:12px;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-hint{order:21;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-help{order:22;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st107-toolbar{order:30;margin-top:12px;}
+    body.v1529-clean-compact .v1529-left .v1529-panel > .st106-note-box{order:40;}
+    /* 任務屬性、投影/亮點牆/Replay：改成一排小按鈕 */
+    body.v1529-clean-compact .st120-attr-buttons{display:flex;flex-wrap:wrap;gap:6px;}
+    body.v1529-clean-compact .st120-attr-btn{width:auto !important;flex:0 0 auto;margin:0 !important;padding:7px 11px;font-size:13px;min-height:34px;}
+    body.v1529-clean-compact .st120-task-attr-picker{padding:10px 12px;}
+    body.v1529-clean-compact .st107-toolbar{display:flex !important;flex-wrap:wrap;gap:6px;}
+    body.v1529-clean-compact .st107-toolbar button{width:auto !important;flex:1 1 auto;margin:0 !important;padding:8px 10px;font-size:13px;}
     /* 角色詳細面板：下方滑出的面板 */
     body.v1529-clean-compact .v1529-sheet-backdrop{position:fixed;inset:0;background:rgba(20,30,24,.38);z-index:10040;animation:v1529Fade .18s ease;}
     body.v1529-clean-compact .v1529-drawer.v1529-sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(1080px,calc(100vw - 24px));max-height:84vh;margin:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;z-index:10050;background:#fffdf6;border-radius:26px 26px 0 0;padding:0 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px rgba(20,30,24,.25);animation:v1529Up .22s ease;}
