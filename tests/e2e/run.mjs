@@ -42,7 +42,7 @@ function runOne(name){
 
 const t0=Date.now();
 chrome=await launchChrome();
-console.log(`[run] ${tests.length} 個測試，並行 ${jobs}（${cpus} 核心、${Math.round(memGB)}GB、負載 ${load.toFixed(1)}），共用一個 Chrome`);
+console.log(`[run] ${tests.length} 個測試，並行 ${Math.min(jobs,tests.length)}（${cpus} 核心、${Math.round(memGB)}GB、負載 ${load.toFixed(1)}），共用一個 Chrome`);
 const queue=[...tests], results=[];
 await Promise.all(Array.from({length:Math.min(jobs,queue.length)},async()=>{
   while(queue.length && !stopping){

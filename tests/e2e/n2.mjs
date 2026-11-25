@@ -61,6 +61,9 @@ console.log("denied",await E.ev(`return document.getElementById("lessonSyncStatu
 await E.ev(`await firebaseUploadAll(true,true)`);
 const F=await device("new.html",{seed:mk()});await F.ev(`await firebaseDownloadAll()`);await open(F);
 ok("拒絕時整包仍可同步",await val(F,"lessonWeeklyTitle")==="拒絕測試",await val(F,"lessonWeeklyTitle"));
+/* E、F 測完先關掉：不然拒絕解除後 E 會補寫「拒絕測試」到雲端，
+   讓下一段 G 出現兩個版本（App 會正確地停下來讓使用者選），干擾下一段要測的情境 */
+await E.close();await F.close();
 db.deny=null;
 // 還原雲端歷史 → hold → 上傳
 const G=await device("new.html",{seed:mk()});await sleep(2500);await open(G);await G.ev(`await firebaseUploadAll(true,true)`);const key=Object.keys(get("battleSystem/historyIndex")).sort().at(-1);

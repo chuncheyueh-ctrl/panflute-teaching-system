@@ -31,7 +31,7 @@ await ev(`scoreSetMark(scoreContext.examId,${JSON.stringify(ids[3])},"absent")`)
 const prog=await ev(`document.getElementById("scoreProgress").open=true;return document.getElementById("scoreProgress").innerText.replace(/\\s+/g," ")`);console.log(prog);
 ok("進步名單",prog.includes("3 位進步")&&prog.includes("+20")&&!prog.includes("測試0"),prog);
 // 匯出 CSV
-const csv=await ev(`let cap=null;const orig=URL.createObjectURL;URL.createObjectURL=b=>{cap=b;return "blob:x"};const oc=HTMLAnchorElement.prototype.click;let nm="";HTMLAnchorElement.prototype.click=function(){nm=this.download};scoreExportCsv();URL.createObjectURL=orig;HTMLAnchorElement.prototype.click=oc;return nm+"\\n"+await cap.text()`);
+const csv=await ev(`let cap=null;const orig=URL.createObjectURL;URL.createObjectURL=b=>{cap=b;return "blob:x"};const oc=HTMLAnchorElement.prototype.click;let nm="";HTMLAnchorElement.prototype.click=function(){nm=this.download};scoreExportCsv();URL.createObjectURL=orig;HTMLAnchorElement.prototype.click=oc;/* Blob.text() 會吃掉開頭的 BOM，改成保留 BOM 的解碼，才驗得到 */return nm+"\\n"+new TextDecoder("utf-8",{ignoreBOM:true}).decode(await cap.arrayBuffer())`);
 console.log(csv);
 ok("CSV 有 BOM 與標題",csv.split("\n")[1].startsWith("﻿座號,姓名,狀態,紙筆測驗"),csv.split("\n")[1]);
 ok("CSV 缺考",csv.includes("缺考,,"),csv);
