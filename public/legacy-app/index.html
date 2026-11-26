@@ -9101,6 +9101,32 @@ function checkScheduleSwitch(){
 }
 setInterval(checkScheduleSwitch, 10000);
 
+/* 換日：classContext.date 只在開啟 App 時設成今天。iPad 常常整天、甚至隔天都不會重新載入頁面，
+   隔天按「開始上課」或讀取雲端後，看的還是昨天的出席（今天別台點的出席看起來像沒有同步）。
+   日期還是「開 App 那天」的話就跟著換成今天；使用者自己選了別的日期就不動。 */
+let __classDateAutoDay = today();
+function checkClassDateRollover(){
+  const t = today();
+  if(t === __classDateAutoDay) return false;
+  const prev = __classDateAutoDay;
+  __classDateAutoDay = t;
+  if(classContext.date !== prev) return false;
+  classContext.date = t;
+  try{
+    if(typeof startClassMode !== "undefined" && startClassMode){
+      if(typeof prepareStartClassData === "function") prepareStartClassData();
+      renderStartClassMode();
+    }else if(currentPage === "classroom" && !document.activeElement?.matches?.("input,textarea,select,[contenteditable]")){
+      render();
+    }
+  }catch(e){ console.warn("換日更新畫面失敗", e); }
+  return true;
+}
+setInterval(checkClassDateRollover, 10000);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "visible") checkClassDateRollover(); });
+window.addEventListener("pageshow", checkClassDateRollover);
+window.addEventListener("focus", checkClassDateRollover);
+
 function checkScheduleAutoSelect(){
   if(typeof startClassMode !== "undefined" && startClassMode) return;
   if(document.body.classList.contains("start-class-mode")) return;
