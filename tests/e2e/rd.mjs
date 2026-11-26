@@ -33,4 +33,25 @@ ok("舊的未扣點紀錄取消時不多加點",r4.pts===20&&r4.logs===0,r4);
 // 5. 點數不足不能兌換
 const r5=JSON.parse(await ev(`state.points[__sid]=1;RewardCore.redeem(__rw);await new Promise(r=>setTimeout(r,200));${look}`));
 ok("點數不足擋下且不扣點",r5.pts===1&&r5.al.includes("點數不足")&&r5.logs===0,r5);
+// 6. 未扣點清單：只列出沒扣到點的兌換；舊流程有扣點（有「兌換：」點數紀錄）的不列，取消時要加回
+const r6=JSON.parse(await ev(`state.points[__sid]=30;const sid2=state.students.find(s=>s.id!==__sid).id;state.points[sid2]=7;
+state.redeemLogs.push({id:"u1",studentId:__sid,rewardId:__rw,rewardName:"糖果",cost:5,date:"2026-10-01T10:00"},
+ {id:"u2",studentId:__sid,rewardId:__rw,rewardName:"貼紙",cost:3,date:"2026-10-02T10:00"},
+ {id:"u3",studentId:sid2,rewardId:__rw,rewardName:"糖果",cost:5,date:"2026-10-03T10:00"},
+ {id:"k1",studentId:__sid,rewardId:__rw,rewardName:"糖果",cost:5,date:"2026-09-01T10:00"});
+state.pointLogs.push({id:"pk1",studentId:__sid,amount:-5,reason:"兌換：糖果",date:"2026-09-01T10:00"});
+saveState();rewardTabMode="logs";renderRewards();await new Promise(r=>setTimeout(r,200));
+const a=redeemDeductionAudit();const box=document.querySelector(".redeem-audit");
+const res={ids:[...a.ids].sort(),total:a.total,stu:a.students.map(g=>g.total),box:box?.innerText||"",tags:[...document.querySelectorAll(".redeem-audit-tag")].length,
+ p1:state.points[__sid],p2:state.points[sid2]};
+RewardCore.cancelRedeem("k1");await new Promise(r=>setTimeout(r,300));res.afterK1=state.points[__sid];
+RewardCore.cancelRedeem("u1");await new Promise(r=>setTimeout(r,300));res.afterU1=state.points[__sid];
+rewardTabMode="logs";renderRewards();res.left=[...redeemDeductionAudit().ids].sort();
+return JSON.stringify(res)`));
+console.log(r6);await ev(`window.scrollTo(0,0);document.querySelector(".redeem-audit")?.scrollIntoView();return 1`);await d.shot("rd-audit");
+ok("清單只列出沒扣到點的兌換",JSON.stringify(r6.ids)==='["u1","u2","u3"]'&&r6.total===13&&JSON.stringify(r6.stu)==="[8,5]",r6);
+ok("畫面顯示清單與標記，且說明只列出不改點",r6.box.includes("少扣 8 點")&&r6.box.includes("少扣 5 點")&&r6.box.includes("不會改任何點數")&&r6.tags===3,r6);
+ok("看清單不會改點數",r6.p1===30&&r6.p2===7,r6);
+ok("舊流程有扣過點的兌換，取消時加回",r6.afterK1===35,r6);
+ok("沒扣到點的兌換，取消時不加回",r6.afterU1===35&&JSON.stringify(r6.left)==='["u2","u3"]',r6);
 console.log("errs",d.errs,"fails",fail);done(fail?1:0);

@@ -2030,6 +2030,17 @@ body.dark-mode .reward-shop-card{
 body.dark-mode .reward-log-item{
   background:#242820;
 }
+.redeem-audit{border:2px solid #e0a030;}
+.redeem-audit-list{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
+.redeem-audit-student{border:1px solid var(--line);border-radius:14px;padding:10px 12px;background:rgba(255,248,230,.85);}
+.redeem-audit-head{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin-bottom:4px;}
+.redeem-audit-head span{font-size:13px;font-weight:800;opacity:.8;}
+.redeem-audit-head .redeem-audit-total{opacity:1;color:#b35c00;}
+.redeem-audit-row{font-size:13px;font-weight:700;opacity:.8;padding-left:4px;}
+.redeem-audit-tag{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#fde7c2;color:#8a4b00;font-size:12px;opacity:1;}
+body.dark-mode .redeem-audit-student{background:#2e2a1f;}
+body.dark-mode .redeem-audit-head .redeem-audit-total{color:#f0b060;}
+body.dark-mode .redeem-audit-tag{background:#4a3a1a;color:#f5d39a;}
 @media(max-width:720px){
   .reward-log-item{
     grid-template-columns:1fr;
@@ -9816,11 +9827,85 @@ function renderRewardSettingsV75(categories){
   `;
 }
 
+/* 找出「當時沒扣到點」的兌換紀錄（只讀，不改資料）。
+   有扣點的兌換一定會留下一筆「兌換：獎品名」的負點數紀錄；「取消兌換：獎品名」的加點紀錄會抵掉一筆。
+   兌換紀錄配不到這種點數紀錄，就是修正前沒扣到點的。 */
+function redeemDeductionAudit(){
+  const key = (sid, name, cost) => `${sid}|${String(name || "").trim()}|${Math.abs(Number(cost) || 0)}`;
+  const t = d => { const v = Date.parse(String(d || "").replace(" ", "T")); return Number.isFinite(v) ? v : 0; };
+  const pool = new Map();
+  const pls = [...(state.pointLogs || [])].sort((a,b)=>t(a.date)-t(b.date));
+  for(const l of pls){
+    const reason = String(l.reason || "");
+    const amt = Number(l.amount ?? l.points ?? 0) || 0;
+    let m;
+    if(amt < 0 && (m = reason.match(/^兌換：(.*)$/))){
+      const k = key(l.studentId, m[1], amt);
+      if(!pool.has(k)) pool.set(k, []);
+      pool.get(k).push(t(l.date));
+    }else if(amt > 0 && (m = reason.match(/^取消兌換：(.*)$/))){
+      const list = pool.get(key(l.studentId, m[1], amt));
+      if(list && list.length) list.pop();
+    }
+  }
+  /* 每筆兌換配時間最接近的扣點紀錄 */
+  const take = log => {
+    const list = pool.get(key(log.studentId, log.rewardName, log.cost ?? log.points));
+    if(!list || !list.length) return false;
+    const lt = t(log.date);
+    let best = 0;
+    list.forEach((v,i)=>{ if(Math.abs(v-lt) < Math.abs(list[best]-lt)) best = i; });
+    list.splice(best, 1); return true;
+  };
+  const logs = [...(state.redeemLogs || [])].sort((a,b)=>t(a.date)-t(b.date));
+  logs.filter(l => l.deducted).forEach(take);
+  const undeducted = logs.filter(l => !l.deducted && !take(l));
+  const byStudent = new Map();
+  for(const log of undeducted){
+    if(!byStudent.has(log.studentId)) byStudent.set(log.studentId, {studentId:log.studentId, logs:[], total:0});
+    const g = byStudent.get(log.studentId);
+    g.logs.push(log); g.total += Number(log.cost ?? log.points ?? 0) || 0;
+  }
+  return {
+    undeducted,
+    ids:new Set(undeducted.map(l=>l.id)),
+    students:[...byStudent.values()].sort((a,b)=>b.total-a.total),
+    total:undeducted.reduce((s,l)=>s+(Number(l.cost ?? l.points ?? 0)||0),0)
+  };
+}
+
+function renderRedeemAuditV75(audit){
+  if(!audit.undeducted.length) return "";
+  return `
+    <section class="card redeem-audit">
+      <h3>⚠️ 修正前沒扣到點的兌換</h3>
+      <div class="note">之前兌換獎品時，系統只寫了紀錄、沒有扣學生點數。下面列出這些兌換（共 ${audit.students.length} 位學生、${audit.undeducted.length} 筆、${audit.total} 點）。<b>這裡只列出，不會改任何點數。</b>如果你已經手動扣過，就不用再處理。</div>
+      <div class="redeem-audit-list">
+        ${audit.students.map(g=>`
+          <div class="redeem-audit-student">
+            <div class="redeem-audit-head">
+              <b>${escapeHtml(rewardLogStudentName(g.studentId))}</b>
+              <span>${escapeHtml(rewardLogClassNameByStudent(g.studentId))}</span>
+              <span>目前 ${Number(state.points?.[g.studentId] || 0)} 點</span>
+              <span class="redeem-audit-total">少扣 ${g.total} 點（${g.logs.length} 筆）</span>
+            </div>
+            ${g.logs.map(log=>`
+              <div class="redeem-audit-row">${escapeHtml(safeFormatDateTime(log.date || ""))}｜${escapeHtml(log.rewardName || "獎品")}｜${Number(log.cost ?? log.points ?? 0)} 點</div>
+            `).join("")}
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderRewardLogsV75(){
   RewardCore.ensure();
   const logs = [...state.redeemLogs].sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+  const audit = redeemDeductionAudit();
 
   return `
+    ${renderRedeemAuditV75(audit)}
     <section class="card">
       <h3>📒 兌換紀錄</h3>
       <div class="note">這裡是獎品兌換帳本。若兌換錯誤，可以按「取消兌換」，系統會移除扣點紀錄並嘗試把庫存加回。</div>
@@ -9833,6 +9918,7 @@ function renderRewardLogsV75(){
                 ${escapeHtml(rewardLogClassNameByStudent(log.studentId))}<br>
                 ${escapeHtml(safeFormatDateTime(log.date || ""))}｜扣除 ${Number(log.cost ?? log.points ?? 0)} 點
                 ${log.discountLabel ? `｜${escapeHtml(log.discountLabel)}` : ""}
+                ${audit.ids.has(log.id) ? `<span class="redeem-audit-tag">當時未扣點</span>` : ""}
               </div>
             </div>
             <button class="btn red" onclick="RewardCore.cancelRedeem('${log.id}')">取消兌換</button>
@@ -24116,9 +24202,11 @@ ST160_StateGuard.install();
         const reward = state.rewards.find(r=>r.id===log.rewardId);
         const cost = numberPoint(log.cost ?? log.points);
         if(reward) reward.stock = Number(reward.stock || 0) + 1;
+        /* 修正前的兌換沒有扣點，取消時也不能加回，否則會多出點數。
+           （更早的舊兌換流程有扣點，會留下「兌換：」點數紀錄，這種要加回） */
+        const wasDeducted = log.deducted || (typeof redeemDeductionAudit === "function" ? !redeemDeductionAudit().ids.has(log.id) : false);
         state.redeemLogs = state.redeemLogs.filter(x=>x.id!==logId);
-        /* 修正前的兌換沒有扣點，取消時也不能加回，否則會多出點數 */
-        if(log.deducted) adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
+        if(wasDeducted) adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
         try{ if(typeof markDirty === "function") markDirty("取消獎品兌換"); }catch(e){}
         showToast("已取消兌換");
