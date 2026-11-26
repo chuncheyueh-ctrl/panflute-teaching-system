@@ -24069,9 +24069,12 @@ ST160_StateGuard.install();
   window.start933StudentPoints = getStudentPointsCore;
 
   try{
-    if(window.RewardCore){
-      window.RewardCore.studentPoints = getStudentPointsCore;
-      window.RewardCore.redeem = function(rewardId){
+    /* RewardCore 是 const 宣告，不在 window 上；以前只檢查 window.RewardCore，這段從來沒生效，
+       結果兌換只寫紀錄、沒有扣 state.points。改成直接取用全域的 RewardCore。 */
+    const RC = window.RewardCore || (typeof RewardCore !== "undefined" ? RewardCore : null);
+    if(RC){
+      RC.studentPoints = getStudentPointsCore;
+      RC.redeem = function(rewardId){
         this.ensure?.();
         const reward = state.rewards.find(r=>r.id===rewardId);
         const studentId = this.selectedStudentId();
@@ -24095,7 +24098,8 @@ ST160_StateGuard.install();
           date:nowText(),
           categoryId:reward.categoryId || "",
           discountLabel:info.label || "",
-          source:"v15.5_clean_points_core"
+          source:"v15.5_clean_points_core",
+          deducted:true
         });
         reward.stock = Math.max(0, Number(reward.stock ?? 0) - 1);
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
@@ -24103,7 +24107,7 @@ ST160_StateGuard.install();
         showToast("兌換完成");
         try{ if(typeof renderRewards === "function") renderRewards(); else renderAfterPointChange(); }catch(e){ renderAfterPointChange(); }
       };
-      window.RewardCore.cancelRedeem = function(logId){
+      RC.cancelRedeem = function(logId){
         this.ensure?.();
         const log = state.redeemLogs.find(x=>x.id===logId);
         if(!log) return alert("找不到這筆兌換紀錄。");
@@ -24113,7 +24117,8 @@ ST160_StateGuard.install();
         const cost = numberPoint(log.cost ?? log.points);
         if(reward) reward.stock = Number(reward.stock || 0) + 1;
         state.redeemLogs = state.redeemLogs.filter(x=>x.id!==logId);
-        adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
+        /* 修正前的兌換沒有扣點，取消時也不能加回，否則會多出點數 */
+        if(log.deducted) adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
         try{ if(typeof markDirty === "function") markDirty("取消獎品兌換"); }catch(e){}
         showToast("已取消兌換");
