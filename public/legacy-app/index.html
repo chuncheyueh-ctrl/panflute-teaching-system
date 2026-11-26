@@ -2042,14 +2042,45 @@ body.dark-mode .reward-log-item{
 body.dark-mode .redeem-audit-student{background:#2e2a1f;}
 body.dark-mode .redeem-audit-head .redeem-audit-total{color:#f0b060;}
 body.dark-mode .redeem-audit-tag{background:#4a3a1a;color:#f5d39a;}
-.forgot-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0;}
-.forgot-label{font-size:13px;font-weight:900;opacity:.75;margin-right:2px;}
-.forgot-btn{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;border:1.5px solid #e4c9a0;background:#fffaf0;color:#6b4a1d;border-radius:999px;padding:6px 12px;font-size:14px;font-weight:800;cursor:pointer;line-height:1.2;}
-.forgot-btn small{font-size:12px;opacity:.7;}
-.forgot-btn .forgot-count{font-size:11px;font-weight:700;opacity:.65;margin-left:2px;}
-.forgot-btn.often .forgot-count{color:#c0392b;opacity:1;}
-.forgot-btn.on{background:#e67e22;border-color:#e67e22;color:#fff;}
-.forgot-btn.on .forgot-count,.forgot-btn.on small{color:#fff;opacity:.9;}
+/* 點名卡片（整理版）：左邊學生，右邊三組按鈕（出席／點數／忘帶），每組一行 */
+.student-card.rc-card{display:grid !important;grid-template-columns:minmax(220px,300px) 1fr !important;gap:10px 18px !important;align-items:start !important;padding:14px 16px !important;}
+.rc-who{display:flex;gap:12px;align-items:center;min-width:0;}
+.rc-who .student-avatar{width:72px !important;height:72px !important;flex:0 0 72px;border-radius:18px !important;}
+.rc-who-text{min-width:0;}
+.rc-card .student-name{font-size:22px;margin-bottom:0;line-height:1.25;}
+.rc-card .student-meta{font-size:12px;line-height:1.5;}
+.rc-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px;}
+.rc-points{display:inline-block;padding:4px 10px;border-radius:999px;background:linear-gradient(180deg,#fff5b7,#f5c542);color:#5a4300;font-size:13px;font-weight:950;}
+.rc-actions{display:flex;flex-direction:column;gap:7px;min-width:0;}
+.rc-group{display:flex;align-items:flex-start;gap:8px;margin:0;}
+.rc-label{flex:0 0 34px;padding-top:7px;font-size:12px;font-weight:900;color:var(--muted);text-align:right;}
+.rc-btns{display:flex;flex-wrap:wrap;gap:6px;min-width:0;}
+body .rc-btn{display:inline-flex !important;align-items:center;gap:5px;width:auto !important;min-height:34px !important;margin:0 !important;padding:0 13px !important;border-radius:999px !important;border:1.5px solid var(--line) !important;background:#fff !important;color:#4a4237 !important;font-size:14px !important;font-weight:850 !important;line-height:1 !important;box-shadow:none !important;cursor:pointer;flex:0 0 auto !important;}
+body .rc-btn.rc-present{border-color:#9fd5bd !important;color:#2f755e !important;}
+body .rc-btn.rc-late{border-color:#b8cdf3 !important;color:#335aa8 !important;}
+body .rc-btn.rc-leave{color:#666 !important;}
+body .rc-btn.rc-absent{border-color:#f1b9b9 !important;color:#b13d3d !important;}
+body .rc-btn.rc-present.on{background:#3e9a78 !important;border-color:#3e9a78 !important;color:#fff !important;}
+body .rc-btn.rc-late.on{background:#4a74c9 !important;border-color:#4a74c9 !important;color:#fff !important;}
+body .rc-btn.rc-leave.on{background:#8a8a8a !important;border-color:#8a8a8a !important;color:#fff !important;}
+body .rc-btn.rc-absent.on{background:#cf5050 !important;border-color:#cf5050 !important;color:#fff !important;}
+body .rc-btn.rc-plus{background:#fff8dc !important;border-color:#f0d27a !important;color:#7a5a00 !important;}
+body .rc-btn.rc-minus{background:#fff !important;color:#6b6256 !important;}
+body .rc-btn.forgot-btn{background:#fffaf0 !important;border-color:#e8d2ae !important;color:#6b4a1d !important;}
+body .rc-btn.forgot-btn.on{background:#e67e22 !important;border-color:#e67e22 !important;color:#fff !important;}
+.forgot-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:rgba(0,0,0,.07);font-size:11px;font-weight:900;}
+.forgot-btn.often .forgot-count{background:#c0392b;color:#fff;}
+.forgot-btn.on .forgot-count{background:rgba(255,255,255,.3);color:#fff;}
+.rc-card > .growth-box{grid-column:1 / -1;margin:2px 0 0 !important;}
+.rc-card > .growth-box > summary{padding:4px 2px !important;font-size:13px !important;min-height:0 !important;}
+.rc-card > .growth-box:not([open]){padding:2px 10px !important;min-height:0 !important;height:auto !important;background:transparent !important;border:none !important;border-top:1px dashed var(--line) !important;border-radius:0 !important;}
+@media(max-width:820px){
+  .student-card.rc-card{grid-template-columns:1fr !important;}
+  .rc-label{flex-basis:30px;}
+}
+body.dark-mode .rc-btn{background:#262b25 !important;color:#e6ece5 !important;border-color:#45503f !important;}
+body.dark-mode .rc-btn.rc-plus{background:#3a3320 !important;color:#f3dc9a !important;border-color:#6a5a2a !important;}
+body.dark-mode .rc-btn.forgot-btn{background:#2c2a22 !important;border-color:#6a5530 !important;color:#f3dfbd !important;}
 .forgot-badge{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#fdecea;color:#b03a2e;font-size:12px;font-weight:900;white-space:nowrap;}
 .v1529-card .forgot-badge{margin:2px 0 0;font-size:11px;padding:1px 6px;}
 .forgot-strip{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;border:1.5px solid #f0b9a8;background:#fff5f2;border-radius:14px;padding:10px 14px;margin-bottom:12px;font-size:14px;}
@@ -2057,12 +2088,8 @@ body.dark-mode .redeem-audit-tag{background:#4a3a1a;color:#f5d39a;}
 .forgot-stats .forgot-hot{color:#c0392b;font-weight:900;}
 .forgot-stats .forgot-dates{font-size:12px;opacity:.8;max-width:420px;}
 .v1529-sheet .forgot-row{margin:0 0 12px;}
-.student-card > .forgot-row{grid-column:1 / -1;margin:2px 0;}
-body .forgot-row .forgot-btn{width:auto !important;flex:0 0 auto !important;min-height:0 !important;margin:0 !important;}
 .forgot-stats th,.forgot-stats td:first-child{white-space:nowrap;}
 .forgot-stats-actions{margin:8px 0;}
-body.dark-mode .forgot-btn{background:#2c2a22;border-color:#6a5530;color:#f3dfbd;}
-body.dark-mode .forgot-btn.on{background:#d9731a;border-color:#d9731a;color:#fff;}
 body.dark-mode .forgot-badge{background:#4a2420;color:#f5b7ae;}
 body.dark-mode .forgot-strip{background:#2e2220;border-color:#6a3a30;}
 body.dark-mode .forgot-strip-item{color:#f5b7ae;}
@@ -10956,7 +10983,10 @@ function forgotLogsList(){
 }
 function forgotPointFor(itemId){
   const v = state.settings?.forgotPoints?.[itemId];
-  return Number.isFinite(Number(v)) && v !== "" && v !== null && v !== undefined ? Math.abs(Number(v)) : 1;
+  if(Number.isFinite(Number(v)) && v !== "" && v !== null && v !== undefined) return Math.abs(Number(v));
+  /* 沒設定過：沿用原本自訂的同名點數按鈕（例如「沒帶筆 -1」） */
+  const act = (state.pointActions || []).find(a=>a && a.active !== false && forgotItemForActionName(a.name) === itemId && Number(a.amount) < 0);
+  return act ? Math.abs(Number(act.amount)) : 1;
 }
 function forgotAlertThreshold(){
   const v = Number(state.settings?.forgotAlert);
@@ -11030,15 +11060,29 @@ function forgotToggle(studentId, itemId){
 function forgotButtonsHtml(studentId){
   const c = forgotCounts(studentId), th = forgotAlertThreshold();
   return `
-    <div class="forgot-row" data-forgot-row="${escapeHtml(studentId)}">
-      <span class="forgot-label">🎒 忘帶</span>
-      ${forgotItems().map(it=>{
-        const on = !!forgotTodayLog(studentId, it.id);
-        const pts = forgotPointFor(it.id);
-        return `<button type="button" class="forgot-btn ${on?"on":""} ${c[it.id]>=th?"often":""}" data-forgot-item="${it.id}" aria-pressed="${on}" onclick="event.stopPropagation();forgotToggle('${studentId}','${it.id}')">${it.icon} ${it.name}${pts ? ` <small>-${pts}</small>` : ""}<span class="forgot-count">本學期 ${c[it.id]} 次</span></button>`;
-      }).join("")}
+    <div class="rc-group forgot-row" data-forgot-row="${escapeHtml(studentId)}">
+      <span class="rc-label">忘帶</span>
+      <div class="rc-btns">
+        ${forgotItems().map(it=>{
+          const on = !!forgotTodayLog(studentId, it.id);
+          const pts = forgotPointFor(it.id);
+          const n = c[it.id];
+          return `<button type="button" class="rc-btn forgot-btn ${on?"on":""} ${n>=th?"often":""}" data-forgot-item="${it.id}" aria-pressed="${on}" title="${escapeHtml(it.name)}${pts ? `，扣 ${pts} 點` : ""}｜本學期 ${n} 次" onclick="event.stopPropagation();forgotToggle('${studentId}','${it.id}')">${it.icon} ${it.name}<span class="forgot-count" aria-label="本學期 ${n} 次">${n}</span></button>`;
+        }).join("")}
+      </div>
     </div>
   `;
+}
+/* 點名卡片的點數按鈕：跟忘帶按鈕重複的自訂按鈕（沒帶資料夾、沒帶筆、譜不見…）不再顯示，改用忘帶按鈕記錄 */
+function forgotItemForActionName(name){
+  const n = String(name || "");
+  if(/資料夾/.test(n) && /沒帶|忘/.test(n)) return "folder";
+  if(/(鉛筆盒|筆袋|沒帶筆|忘了帶筆|忘記帶筆)/.test(n)) return "pencil";
+  if(/(譜不見|沒帶譜|忘了帶譜|忘記帶譜|樂譜不見)/.test(n)) return "score";
+  return "";
+}
+function rollcallPointActions(){
+  return activePointActions().filter(a=>!forgotItemForActionName(a.name));
 }
 /* 常忘帶的小標記（卡片上） */
 function forgotBadgeHtml(studentId){
@@ -11136,35 +11180,39 @@ function renderClassroomRollcall(students){
         const xpTotal = growthXpTotal(student.id);
         const lv = growthLevelInfo(xpTotal);
         return `
-          <article class="card student-card">
-            <div class="student-head">
+          <article class="card student-card rc-card">
+            <div class="rc-who">
               ${studentPhotoHtml(student,"student-avatar",{fallback:"👦",fallbackStyle:"display:flex;align-items:center;justify-content:center;font-size:24px"})}
-              <div>
+              <div class="rc-who-text">
                 <div class="student-name">${escapeHtml(student.name)}</div>
-                <div class="student-meta">
-                  ${escapeHtml(studentLine(student,classContext.classId))}<br>
+                <div class="student-meta">${escapeHtml(studentLine(student,classContext.classId))}</div>
+                <div class="rc-tags">
                   <span class="status-pill ${statusClass(status)}">${statusText(status)}</span>
+                  <span class="rc-points">⭐ ${point} 點</span>
                   ${forgotBadgeHtml(student.id)}
                 </div>
               </div>
             </div>
 
-            <div class="point-box">
-              <div class="star">⭐</div>
-              <div class="num">${point}</div>
-              <div class="label">目前點數</div>
+            <div class="rc-actions">
+              <div class="rc-group">
+                <span class="rc-label">出席</span>
+                <div class="rc-btns">
+                  ${[["present",`出席 +${state.settings.attendPoint}`,"rc-present"],["late","遲到","rc-late"],["leave","請假","rc-leave"],["absent","缺席","rc-absent"]].map(([v,label,cls])=>`
+                    <button class="rc-btn ${cls} ${status===v?"on":""}" aria-pressed="${status===v}" onclick="setAttendance('${student.id}','${classContext.classId}','${classContext.date}','${v}')">${label}</button>
+                  `).join("")}
+                </div>
+              </div>
+              <div class="rc-group">
+                <span class="rc-label">點數</span>
+                <div class="rc-btns">
+                  ${rollcallPointActions().map(action=>`
+                    <button class="rc-btn ${Number(action.amount)>=0 ? "rc-plus" : "rc-minus"}" onclick='addPoints("${student.id}",${Number(action.amount)||0},${jsString(action.name)})'>${escapeHtml(action.name)}</button>
+                  `).join("")}
+                </div>
+              </div>
+              ${forgotButtonsHtml(student.id)}
             </div>
-
-            <div class="actions">
-              <button class="btn primary" onclick="setAttendance('${student.id}','${classContext.classId}','${classContext.date}','present')">出席 +${state.settings.attendPoint}</button>
-              <button class="btn ghost" onclick="setAttendance('${student.id}','${classContext.classId}','${classContext.date}','leave')">請假</button>
-              <button class="btn blue" onclick="setAttendance('${student.id}','${classContext.classId}','${classContext.date}','late')">遲到</button>
-              <button class="btn red" onclick="setAttendance('${student.id}','${classContext.classId}','${classContext.date}','absent')">缺席</button>
-              ${activePointActions().map(action=>`
-                <button class="btn ${Number(action.amount)>=0 ? "gold" : "ghost"}" onclick='addPoints("${student.id}",${Number(action.amount)||0},${jsString(action.name)})'>${escapeHtml(action.name)}</button>
-              `).join("")}
-            </div>
-            ${forgotButtonsHtml(student.id)}
 
             <details class="growth-box">
               <summary>🌱 成長日誌｜${lv.current.title}｜累積 ${xpTotal} XP</summary>

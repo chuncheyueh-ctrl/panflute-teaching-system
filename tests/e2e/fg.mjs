@@ -19,7 +19,7 @@ const click=item=>`document.querySelector('[data-forgot-row="'+__a+'"] [data-for
 // 1. 按沒帶鉛筆盒
 const r1=JSON.parse(await ev(`${click("pencil")}${look}`));console.log(r1);
 ok("沒帶鉛筆盒：扣 1 點、留下紀錄、按鈕亮起",r1.pts===9&&r1.logs===1&&JSON.stringify(r1.on)==='["pencil"]'&&r1.pl==="沒帶鉛筆盒",r1);
-ok("提示本學期第幾次",r1.toast.includes("本學期第 1 次")&&r1.cnt.includes("1 次"),r1);
+ok("提示本學期第幾次",r1.toast.includes("本學期第 1 次")&&r1.cnt==="1",r1);
 // 2. 再按一次取消
 const r2=JSON.parse(await ev(`${click("pencil")}${look}`));
 ok("再按一次取消：點數加回、紀錄移除",r2.pts===10&&r2.logs===0&&r2.on.length===0&&r2.pl==="取消：沒帶鉛筆盒",r2);
@@ -30,7 +30,7 @@ ok("提示上的復原會取消紀錄並加回點數",r3.pts===10&&r3.logs===0,r
 const r4=JSON.parse(await ev(`["2026-10-01","2026-10-08","2026-10-15"].forEach((dt,i)=>state.forgotLogs.push({id:"old"+i,studentId:__a,classId:classContext.classId,termId:classContext.termId,date:dt,item:"pencil",points:1}));
 saveState();render();await new Promise(r=>setTimeout(r,200));${look}`));console.log(r4);
 await ev(`document.querySelector(".forgot-strip")?.scrollIntoView();return 1`);await d.shot("fg-rollcall");
-ok("本學期 3 次：卡片標記、上方提醒、按鈕變紅",r4.badge.includes("3")&&r4.strip.includes("鉛筆盒 3")&&JSON.stringify(r4.often)==='["pencil"]'&&r4.cnt.includes("3 次"),r4);
+ok("本學期 3 次：卡片標記、上方提醒、按鈕變紅",r4.badge.includes("3")&&r4.strip.includes("鉛筆盒 3")&&JSON.stringify(r4.often)==='["pencil"]'&&r4.cnt==="3",r4);
 // 5. 設定扣點：譜不見扣 2
 const r5=JSON.parse(await ev(`state.settings.forgotPoints={score:2};saveState();render();await new Promise(r=>setTimeout(r,200));${click("score")}${look}`));
 ok("設定中心的扣點數生效（譜不見 -2）",r5.pts===8&&r5.pl==="譜不見",r5);
@@ -57,6 +57,20 @@ return JSON.stringify({head:t?.rows[0].innerText.replace(/\\s+/g," ")||"",row:ro
 console.log(r7);await d.shot("fg-stats");
 ok("忘帶統計表：各項次數、合計、扣點、日期",r7.row&&r7.row[2]==="1"&&r7.row[3]==="3"&&r7.row[4]==="1"&&r7.row[5]==="5"&&r7.row[6]==="-6"&&r7.row[7].includes("10-01"),r7);
 ok("只列有紀錄的學生並附總計說明",r7.rows===2&&r7.note.includes("1 位有忘帶紀錄"),r7);
+// 7b. 點名卡片整理：跟忘帶重複的自訂點數按鈕不顯示；沒設定扣點時沿用自訂按鈕的扣點；出席狀態按鈕亮起
+const r7b=JSON.parse(await ev(`state.pointActions.push({id:"pa1",name:"沒帶筆",amount:-2,active:true,order:90},{id:"pa2",name:"上課認真",amount:2,active:true,order:91},{id:"pa3",name:"譜不見",amount:-1,active:true,order:92});
+delete state.settings.forgotPoints;saveState();document.querySelector('[data-page="classroom"]').click();await new Promise(r=>setTimeout(r,400));classroomTab="rollcall";render();await new Promise(r=>setTimeout(r,200));
+const card=document.querySelector('[data-forgot-row="'+__b+'"]').closest(".rc-card");
+const pointBtns=[...card.querySelectorAll(".rc-group:not(.forgot-row) .rc-btns")][1].innerText;
+setAttendance(__b,classContext.classId,classContext.date,"late");await new Promise(r=>setTimeout(r,300));
+const card2=document.querySelector('[data-forgot-row="'+__b+'"]').closest(".rc-card");
+return JSON.stringify({pointBtns,pencilPts:forgotPointFor("pencil"),folderPts:forgotPointFor("folder"),on:[...card2.querySelectorAll(".rc-btn.on")].map(b=>b.innerText.trim()),
+ groups:[...card2.querySelectorAll(".rc-label")].map(x=>x.innerText)})`));
+console.log(r7b);
+ok("重複的自訂按鈕（沒帶筆、譜不見）不顯示，其他自訂按鈕保留",!r7b.pointBtns.includes("沒帶筆")&&!r7b.pointBtns.includes("譜不見")&&r7b.pointBtns.includes("上課認真"),r7b);
+ok("沒設定扣點時沿用自訂按鈕的扣點（沒帶筆 -2）",r7b.pencilPts===2&&r7b.folderPts===1,r7b);
+ok("卡片分成出席／點數／忘帶三組，目前出席狀態亮起",JSON.stringify(r7b.groups)==='["出席","點數","忘帶"]'&&JSON.stringify(r7b.on)==='["遲到"]',r7b);
+await ev(`window.scrollTo(0,0);document.getElementById("classroomBody")?.scrollIntoView();return 1`);await d.shot("fg-rollcall2");
 // 8. 重新整理後保留
 await new Promise(r=>setTimeout(r,800));await d.go();
 const r8=JSON.parse(await ev(`${ctx}window.__a=${JSON.stringify(info.a)};return JSON.stringify({logs:(state.forgotLogs||[]).filter(l=>l.studentId===__a).length,pts:state.points[__a]})`));
