@@ -50,8 +50,33 @@ rewardTabMode="logs";renderRewards();res.left=[...redeemDeductionAudit().ids].so
 return JSON.stringify(res)`));
 console.log(r6);await ev(`window.scrollTo(0,0);document.querySelector(".redeem-audit")?.scrollIntoView();return 1`);await d.shot("rd-audit");
 ok("清單只列出沒扣到點的兌換",JSON.stringify(r6.ids)==='["u1","u2","u3"]'&&r6.total===13&&JSON.stringify(r6.stu)==="[8,5]",r6);
-ok("畫面顯示清單與標記，且說明只列出不改點",r6.box.includes("少扣 8 點")&&r6.box.includes("少扣 5 點")&&r6.box.includes("不會改任何點數")&&r6.tags===3,r6);
+ok("畫面顯示清單與標記，且說明只列出不改點",r6.box.includes("少扣 8 點")&&r6.box.includes("少扣 5 點")&&r6.box.includes("之前不會改任何點數")&&r6.box.includes("全部補扣（13 點）")&&r6.tags===3,r6);
 ok("看清單不會改點數",r6.p1===30&&r6.p2===7,r6);
 ok("舊流程有扣過點的兌換，取消時加回",r6.afterK1===35,r6);
 ok("沒扣到點的兌換，取消時不加回",r6.afterU1===35&&JSON.stringify(r6.left)==='["u2","u3"]',r6);
+// 7. 全部補扣：依清單扣點、標記已扣點、清單消失；之後取消補扣過的兌換要加回；重新整理後保留
+const r7=JSON.parse(await ev(`const sid2=state.students.find(s=>s.id!==__sid).id;window.__sid2=sid2;
+state.points[__sid]=30;state.points[sid2]=2;
+state.redeemLogs.push({id:"k2",studentId:__sid,rewardId:__rw,rewardName:"貼紙",cost:3,date:"2026-08-01T10:00"});
+state.pointLogs.push({id:"pk2",studentId:__sid,amount:-3,reason:"兌換：貼紙",date:"2026-08-01T10:00"});
+saveState();rewardTabMode="logs";renderRewards();await new Promise(r=>setTimeout(r,200));
+const before=[...redeemDeductionAudit().ids].sort();
+let cf="";window.confirm=m=>{cf=m;return true};
+document.querySelector(".redeem-audit-actions button").click();await new Promise(r=>setTimeout(r,400));
+const res={before,cf,p1:state.points[__sid],p2:state.points[sid2],after:[...redeemDeductionAudit().ids],box:!!document.querySelector(".redeem-audit"),
+ tags:document.querySelectorAll(".redeem-audit-tag").length,marked:state.redeemLogs.filter(l=>l.backfilled).map(l=>l.id).sort(),
+ pl:state.pointLogs.filter(l=>String(l.reason).startsWith("補扣兌換：")).length,toast:[...document.querySelectorAll(".bt-toast")].map(t=>t.innerText).join("|")};
+window.confirm=()=>true;return JSON.stringify(res)`));
+console.log(r7);
+ok("補扣前確認視窗列出每位學生的點數變化與負點數提醒",r7.cf.includes("共 8 點")&&r7.cf.includes("30 → 27")&&r7.cf.includes("2 → -3")&&r7.cf.includes("負點數"),r7);
+ok("全部補扣後點數正確扣除",r7.p1===27&&r7.p2===-3&&r7.pl===2,r7);
+ok("補扣後清單與標記消失，舊流程有扣點的紀錄不受影響",JSON.stringify(r7.before)==='["u2","u3"]'&&r7.after.length===0&&!r7.box&&r7.tags===0&&JSON.stringify(r7.marked)==='["u2","u3"]',r7);
+ok("提示已補扣",r7.toast.includes("已補扣 2 筆"),r7);
+await new Promise(r=>setTimeout(r,800));await d.go();
+const r8=JSON.parse(await ev(`${ctx}window.__sid2=state.students.find(s=>s.id!==__sid).id;const res={p1:state.points[__sid],after:redeemDeductionAudit().ids.size};
+RewardCore.cancelRedeem("u2");await new Promise(r=>setTimeout(r,300));res.afterCancel=state.points[__sid];res.left=redeemDeductionAudit().ids.size;
+RewardCore.cancelRedeem("k2");await new Promise(r=>setTimeout(r,300));res.afterK2=state.points[__sid];return JSON.stringify(res)`));
+console.log(r8);
+ok("重新整理後補扣結果保留",r8.p1===27&&r8.after===0,r8);
+ok("取消補扣過的兌換會加回點數，且不影響其他紀錄",r8.afterCancel===30&&r8.left===0&&r8.afterK2===33,r8);
 console.log("errs",d.errs,"fails",fail);done(fail?1:0);

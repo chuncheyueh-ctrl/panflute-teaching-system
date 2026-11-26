@@ -2031,6 +2031,7 @@ body.dark-mode .reward-log-item{
   background:#242820;
 }
 .redeem-audit{border:2px solid #e0a030;}
+.redeem-audit-actions{margin-top:10px;}
 .redeem-audit-list{display:flex;flex-direction:column;gap:10px;margin-top:10px;}
 .redeem-audit-student{border:1px solid var(--line);border-radius:14px;padding:10px 12px;background:rgba(255,248,230,.85);}
 .redeem-audit-head{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin-bottom:4px;}
@@ -9858,7 +9859,7 @@ function redeemDeductionAudit(){
     list.splice(best, 1); return true;
   };
   const logs = [...(state.redeemLogs || [])].sort((a,b)=>t(a.date)-t(b.date));
-  logs.filter(l => l.deducted).forEach(take);
+  logs.filter(l => l.deducted && !l.backfilled).forEach(take);
   const undeducted = logs.filter(l => !l.deducted && !take(l));
   const byStudent = new Map();
   for(const log of undeducted){
@@ -9879,7 +9880,8 @@ function renderRedeemAuditV75(audit){
   return `
     <section class="card redeem-audit">
       <h3>⚠️ 修正前沒扣到點的兌換</h3>
-      <div class="note">之前兌換獎品時，系統只寫了紀錄、沒有扣學生點數。下面列出這些兌換（共 ${audit.students.length} 位學生、${audit.undeducted.length} 筆、${audit.total} 點）。<b>這裡只列出，不會改任何點數。</b>如果你已經手動扣過，就不用再處理。</div>
+      <div class="note">之前兌換獎品時，系統只寫了紀錄、沒有扣學生點數。下面列出這些兌換（共 ${audit.students.length} 位學生、${audit.undeducted.length} 筆、${audit.total} 點）。如果你已經手動扣過，就不用再處理。<b>按下「全部補扣」之前不會改任何點數。</b></div>
+      <div class="redeem-audit-actions"><button class="btn red" onclick="redeemBackfillAll()">全部補扣（${audit.total} 點）</button></div>
       <div class="redeem-audit-list">
         ${audit.students.map(g=>`
           <div class="redeem-audit-student">
@@ -24206,7 +24208,7 @@ ST160_StateGuard.install();
            （更早的舊兌換流程有扣點，會留下「兌換：」點數紀錄，這種要加回） */
         const wasDeducted = log.deducted || (typeof redeemDeductionAudit === "function" ? !redeemDeductionAudit().ids.has(log.id) : false);
         state.redeemLogs = state.redeemLogs.filter(x=>x.id!==logId);
-        if(wasDeducted) adjustStudentPointsCore(log.studentId, cost, `取消兌換：${log.rewardName || reward?.name || "獎品"}`, {render:false});
+        if(wasDeducted) adjustStudentPointsCore(log.studentId, cost, `${log.backfilled ? "取消兌換（補扣）" : "取消兌換"}：${log.rewardName || reward?.name || "獎品"}`, {render:false});
         try{ if(typeof saveState === "function") saveState(); }catch(e){}
         try{ if(typeof markDirty === "function") markDirty("取消獎品兌換"); }catch(e){}
         showToast("已取消兌換");
@@ -24214,6 +24216,33 @@ ST160_StateGuard.install();
       };
     }
   }catch(e){ console.warn("V15.5 RewardCore patch skipped", e); }
+
+  /* 修正前沒扣到點的兌換：一次全部補扣。每筆寫一筆「補扣兌換：」點數紀錄，並把兌換紀錄標成已扣點。 */
+  window.redeemBackfillAll = function(){
+    if(typeof redeemDeductionAudit !== "function") return;
+    const audit = redeemDeductionAudit();
+    if(!audit.undeducted.length){ showToast("沒有需要補扣的兌換"); return; }
+    const lines = audit.students.map(g=>{
+      const name = getStudent(g.studentId)?.name || "未知學生";
+      const before = getStudentPointsCore(g.studentId);
+      return `${name}：${before} → ${before - g.total} 點（-${g.total}）`;
+    });
+    const negative = audit.students.filter(g=>getStudentPointsCore(g.studentId) - g.total < 0).length;
+    const msg = `確定補扣 ${audit.students.length} 位學生、${audit.undeducted.length} 筆兌換，共 ${audit.total} 點？\n\n${lines.join("\n")}`
+      + (negative ? `\n\n注意：有 ${negative} 位學生補扣後會變成負點數。` : "");
+    if(!confirm(msg)) return;
+    for(const log of audit.undeducted){
+      const cost = numberPoint(log.cost ?? log.points);
+      if(cost) adjustStudentPointsCore(log.studentId, -cost, `補扣兌換：${log.rewardName || "獎品"}`, {render:false});
+      log.deducted = true;
+      log.backfilled = true;
+      log.backfilledAt = nowText();
+    }
+    try{ if(typeof saveState === "function") saveState(); }catch(e){}
+    try{ if(typeof markDirty === "function") markDirty("補扣兌換點數"); }catch(e){}
+    showToast(`已補扣 ${audit.undeducted.length} 筆、共 ${audit.total} 點`);
+    try{ if(typeof renderRewards === "function") renderRewards(); else renderAfterPointChange(); }catch(e){ renderAfterPointChange(); }
+  };
 
   try{
     if(window.StudentPortal){
