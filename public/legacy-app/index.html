@@ -2042,6 +2042,30 @@ body.dark-mode .reward-log-item{
 body.dark-mode .redeem-audit-student{background:#2e2a1f;}
 body.dark-mode .redeem-audit-head .redeem-audit-total{color:#f0b060;}
 body.dark-mode .redeem-audit-tag{background:#4a3a1a;color:#f5d39a;}
+.forgot-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0;}
+.forgot-label{font-size:13px;font-weight:900;opacity:.75;margin-right:2px;}
+.forgot-btn{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;border:1.5px solid #e4c9a0;background:#fffaf0;color:#6b4a1d;border-radius:999px;padding:6px 12px;font-size:14px;font-weight:800;cursor:pointer;line-height:1.2;}
+.forgot-btn small{font-size:12px;opacity:.7;}
+.forgot-btn .forgot-count{font-size:11px;font-weight:700;opacity:.65;margin-left:2px;}
+.forgot-btn.often .forgot-count{color:#c0392b;opacity:1;}
+.forgot-btn.on{background:#e67e22;border-color:#e67e22;color:#fff;}
+.forgot-btn.on .forgot-count,.forgot-btn.on small{color:#fff;opacity:.9;}
+.forgot-badge{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#fdecea;color:#b03a2e;font-size:12px;font-weight:900;white-space:nowrap;}
+.v1529-card .forgot-badge{margin:2px 0 0;font-size:11px;padding:1px 6px;}
+.forgot-strip{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;border:1.5px solid #f0b9a8;background:#fff5f2;border-radius:14px;padding:10px 14px;margin-bottom:12px;font-size:14px;}
+.forgot-strip-item{font-weight:800;color:#8a3324;}
+.forgot-stats .forgot-hot{color:#c0392b;font-weight:900;}
+.forgot-stats .forgot-dates{font-size:12px;opacity:.8;max-width:420px;}
+.v1529-sheet .forgot-row{margin:0 0 12px;}
+.student-card > .forgot-row{grid-column:1 / -1;margin:2px 0;}
+body .forgot-row .forgot-btn{width:auto !important;flex:0 0 auto !important;min-height:0 !important;margin:0 !important;}
+.forgot-stats th,.forgot-stats td:first-child{white-space:nowrap;}
+.forgot-stats-actions{margin:8px 0;}
+body.dark-mode .forgot-btn{background:#2c2a22;border-color:#6a5530;color:#f3dfbd;}
+body.dark-mode .forgot-btn.on{background:#d9731a;border-color:#d9731a;color:#fff;}
+body.dark-mode .forgot-badge{background:#4a2420;color:#f5b7ae;}
+body.dark-mode .forgot-strip{background:#2e2220;border-color:#6a3a30;}
+body.dark-mode .forgot-strip-item{color:#f5b7ae;}
 @media(max-width:720px){
   .reward-log-item{
     grid-template-columns:1fr;
@@ -6778,8 +6802,8 @@ function migrateState(data){
   const fallback = buildDefaultState();
   const merged = {...fallback, ...data};
   merged.settings = {...fallback.settings, ...(data.settings || {})};
-  for(const key of ["schools","classes","students","enrollments","attendance","pointLogs","courseNotes","examLogs","rewards","redeemLogs","growthLogs","activityLogs","pointActions","academicTerms","levelStages","levelFields"]){
-    if(!Array.isArray(merged[key])) merged[key] = fallback[key];
+  for(const key of ["schools","classes","students","enrollments","attendance","pointLogs","courseNotes","examLogs","rewards","redeemLogs","growthLogs","activityLogs","pointActions","academicTerms","levelStages","levelFields","forgotLogs"]){
+    if(!Array.isArray(merged[key])) merged[key] = fallback[key] || [];
   }
   if(typeof merged.points !== "object" || !merged.points) merged.points = {};
   if(typeof merged.levelContents !== "object" || !merged.levelContents) merged.levelContents = {};
@@ -10912,6 +10936,185 @@ function renderClassroom(){
   if(classroomTab === "notes") renderClassroomNotes(note, previousNotes);
 }
 
+/* =========================================================
+   忘帶紀錄（沒帶資料夾／沒帶鉛筆盒／譜不見）
+   - 每位學生每堂課每一項只記一次；再按一次是取消（點數加回）
+   - 紀錄在 state.forgotLogs，跟著整包資料上傳／讀取
+   - 扣點數寫一筆點數紀錄，原因就是項目名稱
+   ========================================================= */
+function forgotItems(){
+  return [
+    {id:"folder", name:"沒帶資料夾", short:"資料夾", icon:"📁"},
+    {id:"pencil", name:"沒帶鉛筆盒", short:"鉛筆盒", icon:"✏️"},
+    {id:"score",  name:"譜不見",     short:"譜",     icon:"🎼"}
+  ];
+}
+function forgotItemById(id){ return forgotItems().find(x=>x.id===id) || {id, name:id, short:id, icon:"🎒"}; }
+function forgotLogsList(){
+  if(!Array.isArray(state.forgotLogs)) state.forgotLogs = [];
+  return state.forgotLogs;
+}
+function forgotPointFor(itemId){
+  const v = state.settings?.forgotPoints?.[itemId];
+  return Number.isFinite(Number(v)) && v !== "" && v !== null && v !== undefined ? Math.abs(Number(v)) : 1;
+}
+function forgotAlertThreshold(){
+  const v = Number(state.settings?.forgotAlert);
+  return Number.isFinite(v) && v > 0 ? v : 3;
+}
+function forgotLogTerm(log){ return log.termId || currentAcademicTermId(log.date); }
+function forgotTodayLog(studentId, itemId, classId=classContext.classId, date=classContext.date){
+  return forgotLogsList().find(l=>l.studentId===studentId && l.item===itemId && l.classId===classId && l.date===date) || null;
+}
+/* 學生在某學期各項忘帶次數 {folder:2, pencil:0, score:1, total:3} */
+function forgotCounts(studentId, termId=classContext.termId || currentAcademicTermId()){
+  const out = {total:0};
+  forgotItems().forEach(it=>out[it.id]=0);
+  forgotLogsList().forEach(l=>{
+    if(l.studentId !== studentId || forgotLogTerm(l) !== termId) return;
+    out[l.item] = (out[l.item] || 0) + 1; out.total++;
+  });
+  return out;
+}
+/* 常忘帶：任一項本學期次數達到提醒門檻 */
+function forgotFrequentItems(studentId, termId){
+  const c = forgotCounts(studentId, termId), th = forgotAlertThreshold();
+  return forgotItems().filter(it=>c[it.id] >= th).map(it=>({...it, count:c[it.id]}));
+}
+function forgotRerender(){
+  try{
+    if(typeof startClassMode !== "undefined" && startClassMode && typeof renderStartClassMode === "function") renderStartClassMode();
+    else render();
+  }catch(e){ try{ render(); }catch(_){} }
+}
+function forgotToggle(studentId, itemId){
+  const classId = classContext.classId, date = classContext.date;
+  if(!studentId || !classId || !date) return {ok:false};
+  const item = forgotItemById(itemId);
+  const student = findById(state.students, studentId);
+  const existing = forgotTodayLog(studentId, itemId, classId, date);
+  if(existing){
+    const back = Number(existing.points || 0);
+    state.forgotLogs = forgotLogsList().filter(l=>l !== existing);
+    if(back){
+      state.points[studentId] = (Number(state.points[studentId]) || 0) + back;
+      state.pointLogs.push({id:makeId(), studentId, amount:back, reason:`取消：${item.name}`, date:new Date().toISOString()});
+    }
+    try{ recordActivity("forgot", `${student?.name || "學生"} 取消：${item.name}${back ? `（+${back}）` : ""}`, {studentId, item:itemId}); }catch(e){}
+    saveState();
+    try{ markDirty(`取消${item.name}`); }catch(e){}
+    forgotRerender();
+    try{ showToast(`已取消：${student?.name || ""} ${item.name}`, {icon:"↩️ "}); }catch(e){}
+    return {ok:true, removed:true};
+  }
+  const pts = forgotPointFor(itemId);
+  const log = {id:makeId(), studentId, classId, termId:classContext.termId || currentAcademicTermId(date), date, item:itemId, points:pts, at:new Date().toISOString()};
+  forgotLogsList().push(log);
+  if(pts){
+    state.points[studentId] = (Number(state.points[studentId]) || 0) - pts;
+    state.pointLogs.push({id:makeId(), studentId, amount:-pts, reason:item.name, date:new Date().toISOString()});
+  }
+  try{ recordActivity("forgot", `${student?.name || "學生"} ${item.name}${pts ? `（-${pts}）` : ""}`, {studentId, item:itemId}); }catch(e){}
+  saveState();
+  try{ markDirty(item.name); }catch(e){}
+  forgotRerender();
+  const n = forgotCounts(studentId)[itemId];
+  try{
+    showToast(`${student?.name || ""} ${item.name}${pts ? `（-${pts} 點）` : ""}｜本學期第 ${n} 次`, {icon:item.icon + " ", ms:5000, actionLabel:"復原", onAction:()=>{
+      if(forgotTodayLog(studentId, itemId, classId, date)) forgotToggle(studentId, itemId);
+    }});
+  }catch(e){}
+  return {ok:true, added:true, count:n};
+}
+/* 點名卡片／開始上課詳細面板裡的三個按鈕 */
+function forgotButtonsHtml(studentId){
+  const c = forgotCounts(studentId), th = forgotAlertThreshold();
+  return `
+    <div class="forgot-row" data-forgot-row="${escapeHtml(studentId)}">
+      <span class="forgot-label">🎒 忘帶</span>
+      ${forgotItems().map(it=>{
+        const on = !!forgotTodayLog(studentId, it.id);
+        const pts = forgotPointFor(it.id);
+        return `<button type="button" class="forgot-btn ${on?"on":""} ${c[it.id]>=th?"often":""}" data-forgot-item="${it.id}" aria-pressed="${on}" onclick="event.stopPropagation();forgotToggle('${studentId}','${it.id}')">${it.icon} ${it.name}${pts ? ` <small>-${pts}</small>` : ""}<span class="forgot-count">本學期 ${c[it.id]} 次</span></button>`;
+      }).join("")}
+    </div>
+  `;
+}
+/* 常忘帶的小標記（卡片上） */
+function forgotBadgeHtml(studentId){
+  const list = forgotFrequentItems(studentId);
+  if(!list.length) return "";
+  return `<span class="forgot-badge" title="本學期常忘帶：${escapeHtml(list.map(x=>`${x.short} ${x.count} 次`).join("、"))}">⚠️ ${list.map(x=>`${x.icon}${x.count}`).join(" ")}</span>`;
+}
+/* 點名頁上方：本班常忘帶的同學 */
+function forgotFrequentStripHtml(students){
+  const rows = students.map(st=>({st, list:forgotFrequentItems(st.id)})).filter(r=>r.list.length);
+  if(!rows.length) return "";
+  return `
+    <div class="forgot-strip">
+      <b>⚠️ 本學期常忘帶（${forgotAlertThreshold()} 次以上）</b>
+      ${rows.map(r=>`<span class="forgot-strip-item">${escapeHtml(r.st.name)}：${r.list.map(x=>`${x.short} ${x.count}`).join("、")}</span>`).join("")}
+    </div>
+  `;
+}
+
+/* 統計排行 →「忘帶統計」：期末整理 */
+let forgotStatsTermId = "";
+function forgotStatsRows(students, termId){
+  return students.map(st=>{
+    const logs = forgotLogsList().filter(l=>l.studentId===st.id && forgotLogTerm(l)===termId)
+      .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    const c = {total:logs.length, points:logs.reduce((s,l)=>s+(Number(l.points)||0),0)};
+    forgotItems().forEach(it=>c[it.id]=logs.filter(l=>l.item===it.id).length);
+    return {student:st, logs, ...c};
+  }).sort((a,b)=>b.total-a.total || String(a.student.name).localeCompare(String(b.student.name)));
+}
+function renderForgotStatsCard(students, scopeLabel){
+  const termId = forgotStatsTermId || classContext.termId || currentAcademicTermId();
+  const rows = forgotStatsRows(students, termId);
+  const hit = rows.filter(r=>r.total);
+  const items = forgotItems();
+  const sum = id=>hit.reduce((s,r)=>s+r[id],0);
+  return `
+    <section class="card col-12 forgot-stats">
+      <h3>🎒 忘帶統計｜${escapeHtml(scopeLabel)}</h3>
+      <div class="row">
+        <div class="f4"><label>學期</label>
+          <select onchange="forgotStatsTermId=this.value; render()">${optionList(activeTerms(), termId)}</select>
+        </div>
+      </div>
+      <div class="forgot-stats-actions"><button class="btn" onclick="forgotStatsCopy()">📋 複製表格（可貼到 Excel／Google 試算表）</button></div>
+      <div class="note">共 ${students.length} 位學生，其中 ${hit.length} 位有忘帶紀錄；${items.map(it=>`${it.short} ${sum(it.id)} 次`).join("、")}。紅色代表單項達到 ${forgotAlertThreshold()} 次。</div>
+      ${hit.length ? `
+        <table class="table" id="forgotStatsTable">
+          <tr><th>學生</th><th>班級</th>${items.map(it=>`<th>${it.icon} ${it.short}</th>`).join("")}<th>合計</th><th>扣點</th><th>日期</th></tr>
+          ${hit.map(r=>`
+            <tr>
+              <td><b>${escapeHtml(r.student.name)}</b></td>
+              <td>${escapeHtml(studentClassNames(r.student.id))}</td>
+              ${items.map(it=>`<td class="${r[it.id]>=forgotAlertThreshold()?"forgot-hot":""}">${r[it.id] || ""}</td>`).join("")}
+              <td><b>${r.total}</b></td>
+              <td>${r.points ? `-${r.points}` : ""}</td>
+              <td class="forgot-dates">${r.logs.map(l=>`${escapeHtml(String(l.date).slice(5))} ${forgotItemById(l.item).short}`).join("、")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      ` : `<div class="note">這個範圍、這個學期還沒有忘帶紀錄。</div>`}
+    </section>
+  `;
+}
+function forgotStatsCopy(){
+  const table = document.getElementById("forgotStatsTable");
+  if(!table) return showToast("沒有可以複製的資料");
+  const text = [...table.rows].map(tr=>[...tr.cells].map(td=>td.innerText.replace(/\s+/g," ").trim()).join("\t")).join("\n");
+  const fallback = ()=>{
+    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); showToast("已複製表格"); }catch(e){ alert("複製失敗，請手動選取表格"); }
+    ta.remove();
+  };
+  try{ navigator.clipboard.writeText(text).then(()=>showToast("已複製表格"), fallback); }catch(e){ fallback(); }
+}
+
 function renderClassroomRollcall(students){
   const container = document.getElementById("classroomBody");
   if(!students.length){
@@ -10925,6 +11128,7 @@ function renderClassroomRollcall(students){
     if(a.classId === classContext.classId && a.date === classContext.date && !todayStatus.has(a.studentId)) todayStatus.set(a.studentId, a.status || "");
   }
   container.innerHTML = `
+    ${forgotFrequentStripHtml(students)}
     <section id="studentCards">
       ${students.map(student => {
         const status = todayStatus.get(student.id) || "";
@@ -10940,6 +11144,7 @@ function renderClassroomRollcall(students){
                 <div class="student-meta">
                   ${escapeHtml(studentLine(student,classContext.classId))}<br>
                   <span class="status-pill ${statusClass(status)}">${statusText(status)}</span>
+                  ${forgotBadgeHtml(student.id)}
                 </div>
               </div>
             </div>
@@ -10959,6 +11164,7 @@ function renderClassroomRollcall(students){
                 <button class="btn ${Number(action.amount)>=0 ? "gold" : "ghost"}" onclick='addPoints("${student.id}",${Number(action.amount)||0},${jsString(action.name)})'>${escapeHtml(action.name)}</button>
               `).join("")}
             </div>
+            ${forgotButtonsHtml(student.id)}
 
             <details class="growth-box">
               <summary>🌱 成長日誌｜${lv.current.title}｜累積 ${xpTotal} XP</summary>
@@ -13130,6 +13336,7 @@ function renderStats(){
       <button class="${statsTab==='level'?'active':''}" onclick="statsTab='level'; render()">排笛等級排名</button>
       <button class="${statsTab==='attendance'?'active':''}" onclick="statsTab='attendance'; render()">出席率排名</button>
       <button class="${statsTab==='rewards'?'active':''}" onclick="statsTab='rewards'; render()">兌換統計</button>
+      <button class="${statsTab==='forgot'?'active':''}" onclick="statsTab='forgot'; render()">🎒 忘帶統計</button>
       <button class="${statsTab==='logs'?'active':''}" onclick="statsTab='logs'; render()">操作紀錄</button>
     </div>
 
@@ -13222,6 +13429,7 @@ function renderStats(){
         </section>
       ` : ""}
 
+      ${statsTab==='forgot' ? renderForgotStatsCard(students, scopeLabel) : ""}
       ${statsTab==='logs' ? `
         <section class="card col-12">
           <h3>📝 最近操作紀錄</h3>
@@ -13684,6 +13892,10 @@ function renderBasicSettings(){
         <div class="f6"><label>系統名稱</label><input value="${escapeHtml(state.settings.systemName)}" onchange="state.settings.systemName=this.value; saveState(); render()"></div>
         <div class="f3"><label>出席點數</label><input type="number" value="${state.settings.attendPoint}" onchange="state.settings.attendPoint=Number(this.value); saveState()"></div>
         <div class="f3"><label>升級獎勵點數</label><input type="number" value="${state.settings.upgradeReward}" onchange="state.settings.upgradeReward=Number(this.value); saveState()"></div>
+      </div>
+      <div class="row forgot-settings">
+        ${forgotItems().map(it=>`<div class="f3"><label>${it.icon} ${it.name} 扣點</label><input type="number" min="0" value="${forgotPointFor(it.id)}" onchange="state.settings.forgotPoints={...(state.settings.forgotPoints||{}),${it.id}:Math.abs(Number(this.value)||0)}; saveState()"></div>`).join("")}
+        <div class="f3"><label>常忘帶提醒（本學期幾次）</label><input type="number" min="1" value="${forgotAlertThreshold()}" onchange="state.settings.forgotAlert=Math.max(1,Number(this.value)||3); saveState()"></div>
       </div>
       <hr>
       <h3>⭐ 上課介面點數按鈕</h3>
@@ -29359,6 +29571,7 @@ ST160_StateGuard.install();
         <span class="v1529-name">${esc(st.name || '未命名')}</span>
         <span class="v1529-mage"><span>${mage.emoji}</span><span>${esc(mage.name)} Lv.${mage.level}</span></span>
         <span class="v1529-stats"><b>✨ ${xp(st)}</b><b>🎁 ${points(st)}</b></span>
+        ${typeof forgotBadgeHtml === 'function' ? forgotBadgeHtml(st.id) : ''}
       </button>
     `;
   }
@@ -29377,6 +29590,7 @@ ST160_StateGuard.install();
           <div class="v1529-drawer-title">${esc(st.name)}</div>
           <button type="button" class="btn gold" onclick="v1529ClearSelection()">✕ 收合</button>
         </div>
+        ${typeof forgotButtonsHtml === 'function' ? forgotButtonsHtml(st.id) : ''}
         <div class="v1529-detail-wrap">${inner}</div>
       </section>
     `;
