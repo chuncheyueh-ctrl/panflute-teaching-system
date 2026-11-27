@@ -5,7 +5,7 @@
 import {spawn} from "node:child_process"; import fs from "node:fs"; import os from "node:os"; import path from "node:path";
 import {S, TEST_DIR, launchChrome} from "./lib.mjs";
 
-const DEFAULT=["n1","n2","n3","n4","n5","b1","b2","s3","d2","c1","p1","tt","sp","sc3","sa","tl","rd","dc","fg"];
+const DEFAULT=["n1","n2","n3","n4","n5","b1","b2","s3","d2","c1","p1","tt","sp","sc3","sa","tl","rd","dc","fg","sy"];
 const tests=process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT;
 const cpus=os.cpus().length, memGB=os.totalmem()/2**30, load=os.loadavg()[0];
 const auto=Math.max(1, Math.min(Math.floor(cpus/2), Math.floor(memGB/4), cpus-Math.round(load)));

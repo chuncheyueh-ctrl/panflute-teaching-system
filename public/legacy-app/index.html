@@ -860,6 +860,12 @@ input[type="date"]{
 .upload-reminder{position:fixed;right:18px;top:76px;z-index:9999;max-width:360px;padding:12px 14px;border-radius:18px;background:#fffaf0;border:2px solid #e0a800;box-shadow:0 10px 28px rgba(0,0,0,.16);font-weight:800;font-size:14px;color:#5a4300;line-height:1.5}
 .upload-reminder-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
 .upload-reminder-actions .btn{width:auto;padding:6px 12px;font-size:13px}
+.cloud-newer-notice{border-color:#4a86c8;background:#f2f8ff;color:#1f4f82}
+.cloud-newer-notice .cloud-newer-sub{font-weight:700;font-size:13px;opacity:.85;margin-top:2px}
+body.dark-mode .cloud-newer-notice{background:#1d2b3a;color:#cfe3ff;border-color:#4a86c8}
+body.start-class-mode .cloud-newer-notice{top:auto;bottom:150px;right:16px}
+.sync-status.cloud-newer{color:#1f5f9e}
+.sync-status.cloud-newer .sync-actions button:first-child{background:#4a86c8;color:#fff;border-color:#3a72ad}
 body.dark-mode .upload-reminder{background:#3a3220;color:#f6e3a8;border-color:#b8902a}
 body.dark-mode .sync-status.urgent{background:#4a3c1a;color:#ffd970}
 @media(max-width:720px){.upload-reminder{left:12px;right:12px;top:auto;bottom:76px;max-width:none}}
@@ -7366,6 +7372,22 @@ function clearPendingSyncInfo(meta){
   if(!meta) return;
   delete meta.dirtySinceMs;
   delete meta.pendingImportant;
+  delete meta.pendingCount;
+  delete meta.pendingCountAtMs;
+}
+/* 尚未上傳的變更筆數：一個動作常會連續觸發好幾次 markDirty（例如扣點＋記錄），1.5 秒內的算同一筆 */
+function syncPendingCount(){
+  return syncStatus.dirty ? Math.max(1, Number(state.backupMeta?.pendingCount) || 0) : 0;
+}
+function syncShortTime(ms){
+  const d = new Date(Number(ms) || 0);
+  if(!ms || isNaN(d)) return "";
+  const hm = `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  const n = new Date();
+  if(d.toDateString() === n.toDateString()) return `今天 ${hm}`;
+  const y = new Date(n); y.setDate(n.getDate() - 1);
+  if(d.toDateString() === y.toDateString()) return `昨天 ${hm}`;
+  return `${d.getMonth()+1}/${d.getDate()} ${hm}`;
 }
 function syncPendingImportant(){
   return syncStatus.dirty ? ensureArray(state.backupMeta?.pendingImportant).filter(x=>typeof x === "string") : [];
@@ -7402,6 +7424,9 @@ function markDirty(reason="資料異動"){
     if(!syncStatus.dirty) meta.pendingImportant = [];
     meta.dirtySinceMs = Date.now();
   }
+  if(!syncStatus.dirty) meta.pendingCount = 0;
+  if(Date.now() - Number(meta.pendingCountAtMs || 0) > 1500) meta.pendingCount = (Number(meta.pendingCount) || 0) + 1;
+  meta.pendingCountAtMs = Date.now();
   const important = SYNC_IMPORTANT_RULES.find(([re])=>re.test(String(reason || "")))?.[1];
   if(important){
     meta.pendingImportant = ensureArray(meta.pendingImportant);
@@ -7831,6 +7856,7 @@ async function checkFirebaseFreshness(showAlert=false){
     const at = async path => (await firebaseDb.ref("battleSystem/main/" + path).once("value")).val();
     const cloudMs = Number(await at("updatedAt") || await at("state/backupMeta/lastFirebaseUploadMs") || 0);
     const cloudText = cloudMs ? await at("updatedAtText") : "";
+    syncStatus.cloudDeviceName = cloudMs ? String(await at("deviceName") || "") : "";
     syncStatus.checking = false;
 
     syncStatus.cloudUpdatedAt = cloudMs;
@@ -7864,6 +7890,7 @@ async function checkFirebaseFreshness(showAlert=false){
 
 function hideCloudWarning(){
   document.getElementById("cloudWarningBox")?.remove();
+  document.getElementById("cloudNewerBox")?.remove();
 }
 
 function showCloudNewerWarning(){
@@ -7912,13 +7939,14 @@ function renderSyncStatus(){
     cls = "error";
     text = "🔴 同步失敗";
   }else if(syncStatus.cloudIsNewer){
-    cls = "dirty";
-    text = "⚠️ 雲端較新";
+    cls = "dirty cloud-newer";
+    const who = [syncStatus.cloudDeviceName, syncShortTime(syncStatus.cloudUpdatedAt)].filter(Boolean).join(" ");
+    text = "⚠️ 雲端有較新資料" + (who ? `（${escapeHtml(who)}）` : "") + (syncStatus.dirty ? `</span><span class="sync-pending">這台也有 ${syncPendingCount()} 筆未上傳` : "");
   }else if(syncStatus.dirty){
     const mins = syncDirtyMinutes();
     const pend = syncPendingImportant();
     cls = "dirty" + (mins >= 30 || pend.includes("考試發點數") ? " urgent" : "");
-    text = "🟡 尚未上傳" + (mins >= 10 ? `（${syncDurationText(mins)}）` : "");
+    text = `🟡 ${syncPendingCount()} 筆變更尚未上傳` + (mins >= 10 ? `（${syncDurationText(mins)}）` : "");
     if(pend.length) text += `</span><span class="sync-pending">含：${escapeHtml(pend.join("、"))}`;
   }
 
@@ -7928,8 +7956,11 @@ function renderSyncStatus(){
     <span>${text}</span>
     <span style="opacity:.72;font-weight:700">本機上次：${escapeHtml(safeFormatDateTime(last))}</span>
     <span class="sync-actions">
-      <button onclick="guardedFirebaseUpload()">⬆️ 上傳雲端</button>
-      <button onclick="firebaseDownloadAll()">⬇️ 讀取雲端</button>
+      ${syncStatus.cloudIsNewer && !syncStatus.syncing
+        ? `<button onclick="${syncStatus.dirty ? "showSyncConflictDialog()" : "firebaseDownloadAll()"}">⬇️ 讀取雲端</button>
+      <button onclick="guardedFirebaseUpload()">⬆️ 上傳雲端</button>`
+        : `<button onclick="guardedFirebaseUpload()">⬆️ 上傳雲端</button>
+      <button onclick="firebaseDownloadAll()">⬇️ 讀取雲端</button>`}
       <button onclick="checkFirebaseFreshness(true)">檢查</button>
     </span>
   `;
@@ -7970,6 +8001,104 @@ if(AUTO_UPLOAD_ENABLED){
   setInterval(function(){
     if(syncStatus.dirty && !syncStatus.syncing) guardedFirebaseUpload(true);
   },600000);
+}
+
+/* =========================================================
+   2026-11-27：自動得知「雲端有較新的資料」
+   ---------------------------------------------------------
+   使用者回報：在學校桌機按全班出席並上傳，iPad 讀不到，畫面卻一直
+   顯示「🟢 已同步」。以前只有手動按「檢查」或按上傳時才會比對雲端
+   版本，iPad 根本不知道雲端已經變了。
+
+   現在：即時監聽雲端版本時間（只有一個數字，不下載整包），App 從
+   背景回來時也再確認一次。發現別台上傳過，就在狀態列顯示「雲端有
+   較新資料（哪台、幾點）」，並跳出不擋畫面的提醒，讓使用者自己決定
+   要不要讀取。不會自動讀取或上傳（維持 2026-09-23 的手動原則）。
+   ========================================================= */
+let __cloudWatch = {listening:false, dismissedMs:0, lastQuietCheck:0};
+
+async function applyCloudVersion(cloudMs){
+  cloudMs = Number(cloudMs) || 0;
+  /* 這台自己正在上傳／讀取：等完成、版本基準更新後再判斷 */
+  if(syncStatus.syncing || syncStatus.checking){ setTimeout(()=>quietCloudCheck(true), 1500); return; }
+  const newer = cloudChangedSinceSync(cloudMs);
+  if(newer && cloudMs !== syncStatus.cloudUpdatedAt){
+    try{
+      const at = async path => (await firebaseDb.ref("battleSystem/main/" + path).once("value")).val();
+      syncStatus.cloudUpdatedAtText = String(await at("updatedAtText") || "");
+      syncStatus.cloudDeviceName = String(await at("deviceName") || "");
+    }catch(e){}
+  }
+  syncStatus.cloudUpdatedAt = cloudMs;
+  if(syncStatus.syncing) return;
+  const was = syncStatus.cloudIsNewer;
+  syncStatus.cloudIsNewer = newer;
+  renderSyncStatus();
+  if(newer) showCloudNewerNotice();
+  else if(was) document.getElementById("cloudNewerBox")?.remove();
+}
+
+function showCloudNewerNotice(force=false){
+  if(!syncStatus.cloudIsNewer) return;
+  if(!force && __cloudWatch.dismissedMs === syncStatus.cloudUpdatedAt) return;
+  if(document.getElementById("cloudWarningBox")) return;
+  let box = document.getElementById("cloudNewerBox");
+  if(!box){
+    box = document.createElement("div");
+    box.id = "cloudNewerBox";
+    box.className = "upload-reminder cloud-newer-notice";
+    document.body.appendChild(box);
+  }
+  const who = [syncStatus.cloudDeviceName, syncShortTime(syncStatus.cloudUpdatedAt)].filter(Boolean).join(" ");
+  const n = syncPendingCount();
+  box.innerHTML = syncStatus.dirty
+    ? `<div>⚠️ 雲端有較新的資料，但這台也有 ${n} 筆還沒上傳的修改。</div>
+       ${who ? `<div class="cloud-newer-sub">${escapeHtml(who)} 上傳</div>` : ""}
+       <div class="cloud-newer-sub">直接讀取會蓋掉這台的修改，請先看處理方式。</div>
+       <div class="upload-reminder-actions">
+         <button class="btn gold" onclick="document.getElementById('cloudNewerBox')?.remove();showSyncConflictDialog()">查看處理方式</button>
+         <button class="btn" onclick="dismissCloudNewerNotice()">稍後</button>
+       </div>`
+    : `<div>☁️ 雲端有較新的資料${who ? `（${escapeHtml(who)} 上傳）` : ""}</div>
+       <div class="cloud-newer-sub">這台沒有未上傳的修改，可以放心讀取。</div>
+       <div class="upload-reminder-actions">
+         <button class="btn gold" onclick="firebaseDownloadAll()">⬇️ 讀取雲端</button>
+         <button class="btn" onclick="dismissCloudNewerNotice()">稍後</button>
+       </div>`;
+}
+function dismissCloudNewerNotice(){
+  __cloudWatch.dismissedMs = syncStatus.cloudUpdatedAt;
+  document.getElementById("cloudNewerBox")?.remove();
+}
+
+/* 只讀版本時間；App 從背景回來時用（iPad 放到背景後即時連線可能斷過） */
+async function quietCloudCheck(force=false){
+  if(typeof firebaseDb === "undefined") return;
+  if(!force && Date.now() - __cloudWatch.lastQuietCheck < 15000) return;
+  __cloudWatch.lastQuietCheck = Date.now();
+  try{
+    const ms = Number((await firebaseDb.ref("battleSystem/main/updatedAt").once("value")).val() || 0);
+    await applyCloudVersion(ms);
+  }catch(e){}
+}
+
+function startCloudVersionWatch(){
+  if(__cloudWatch.listening || typeof firebaseDb === "undefined") return;
+  try{
+    __cloudWatch.listening = true;
+    firebaseDb.ref("battleSystem/main/updatedAt").on("value",
+      snap=>applyCloudVersion(snap.val()),
+      ()=>{ __cloudWatch.listening = false; });
+  }catch(e){ __cloudWatch.listening = false; }
+}
+
+if(typeof firebase !== "undefined" && typeof firebaseDb !== "undefined"){
+  try{ firebase.auth().onAuthStateChanged(user=>{ if(user) startCloudVersionWatch(); }); }catch(e){}
+  setInterval(()=>{ try{ if(!__cloudWatch.listening && firebase.auth().currentUser) startCloudVersionWatch(); }catch(e){} }, 30000);
+  const wake = ()=>{ if(document.visibilityState !== "hidden") quietCloudCheck(); };
+  document.addEventListener("visibilitychange", wake);
+  window.addEventListener("pageshow", wake);
+  window.addEventListener("focus", wake);
 }
 
 
@@ -8256,6 +8385,8 @@ function setAttendance(studentId,classId,date,status){
 
   const student = findById(state.students,studentId);
   recordActivity("attendance", `${student?.name || "學生"} ${statusText(status)}｜${className(classId)} ${date}`, {studentId,classId,date,status});
+  /* 2026-11-27：以前點名只存本機、沒標成「尚未上傳」，狀態列會一直顯示已同步 */
+  try{ if(oldStatus !== status) markDirty("出席資料"); }catch(e){}
   saveState();
   render();
 }
@@ -8270,6 +8401,7 @@ function saveCourseNote(classId,date,content,termId=classContext.termId){
   const safeDate = date || classContext.date || today();
   const safeTermId = termId || classContext.termId || currentAcademicTermId(safeDate);
   const existing = state.courseNotes.find(n => n.classId === safeClassId && n.date === safeDate && (n.termId || currentAcademicTermId(n.date)) === safeTermId);
+  const noteChanged = !existing || existing.content !== content;
   if(existing){
     existing.content = content;
     existing.termId = safeTermId;
@@ -8285,6 +8417,7 @@ function saveCourseNote(classId,date,content,termId=classContext.termId){
       updatedAt:localIsoLikeString()
     });
   }
+  try{ if(noteChanged) markDirty("課程紀錄"); }catch(e){}
   saveState();
 }
 
@@ -8343,8 +8476,9 @@ function passExam(studentId,comment){
     comment,
     date:new Date().toISOString()
   });
-  recordActivity("exam", `${student.name} 升級：${levelStageName(from.stageId)}${from.level} → ${levelStageName(target.stageId)}${target.level}`, {studentId,from,to:target,comment});
+  recordActivity("exam", `${student.name} 升級：${levelLabel(from)} → ${levelLabel(target)}`, {studentId,from,to:target,comment});
 
+  try{ markDirty("升級考試"); }catch(e){}
   saveState();
   render();
   showToast(`升級成功，已加 ${reward} 點`);
@@ -8361,6 +8495,7 @@ function failExam(studentId,comment){
   });
   const student = findById(state.students,studentId);
   recordActivity("exam", `${student?.name || "學生"} 升級未通過`, {studentId,comment});
+  try{ markDirty("升級考試"); }catch(e){}
   saveState();
   render();
 }
@@ -8385,6 +8520,7 @@ function downgradeStudent(studentId,comment){
     date:new Date().toISOString()
   });
 
+  try{ markDirty("升級考試"); }catch(e){}
   saveState();
   render();
 }
@@ -8665,6 +8801,7 @@ function addGrowthLog(studentId,type,xp,feedback){
   });
 
   recordActivity("growth", `${student.name} 成長日誌：${growthTypeName(type)} ${amount ? "+"+amount+"XP" : ""}`, {studentId,type,xp:amount});
+  try{ markDirty("成長日誌"); }catch(e){}
   saveState();
   render();
 }
@@ -8687,6 +8824,7 @@ function deleteGrowthLog(logId){
   if(!confirm("確定刪除這筆成長日誌？這會直接移除該筆 XP 紀錄。")) return;
   state.growthLogs = (state.growthLogs || []).filter(x=>x.id!==logId);
   recordActivity("growth-delete", `刪除成長日誌：${growthTypeName(log.type)} ${Number(log.xp)||0}XP`, {logId});
+  try{ markDirty("成長日誌"); }catch(e){}
   saveState();
   document.querySelector(".modal-backdrop")?.remove();
   if(log.studentId) showGrowthProfile(log.studentId);
@@ -13232,6 +13370,7 @@ function undoRedeem(logId){
   });
   recordActivity("redeem", `${student.name} 取消兌換：${log.rewardName || reward?.name || "獎品"}（+${cost}）`, {studentId:student.id,rewardId:log.rewardId,cost});
 
+  try{ markDirty("獎品兌換"); }catch(e){}
   saveState();
   render();
 }
@@ -13274,6 +13413,7 @@ function redeemReward(studentId,rewardId){
   });
   recordActivity("redeem", `${student.name} 兌換：${reward.name}（-${cost}）`, {studentId,rewardId,cost});
 
+  try{ markDirty("獎品兌換"); }catch(e){}
   saveState();
   render();
 }
@@ -18127,6 +18267,7 @@ function st109ToggleTag(studentId, tagId){
   const tag = ST109_TAGS.find(t=>t.id===tagId);
   ST108.replay.log("tag", `${st?.name || "學生"} 標記：${tag?.label || tagId}`);
 
+  try{ markDirty("學生標記"); }catch(e){}
   try{ saveState(); }catch(e){}
   renderStartClassMode();
 }
@@ -18196,6 +18337,7 @@ function st109SaveNextSuggestions(){
     suggestions
   });
   state.nextClassSuggestions = old.slice(-100);
+  try{ markDirty("下次上課建議"); }catch(e){}
   try{ saveState(); }catch(e){}
   return suggestions;
 }
