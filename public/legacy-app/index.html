@@ -7717,17 +7717,37 @@ function getDeviceId(){
   return id;
 }
 
+/* 2026-11-27：Windows 以前叫「目前裝置」、新版 iPad Safari 自稱 Mac 會被叫成「Mac / 電腦」，
+   同步提醒看不出是哪一台。改成自動判斷更準，並可在設定中心自己改名（存在這台裝置，不上傳）。 */
+const DEVICE_NAME_OLD_AUTO = ["目前裝置", "Mac / 電腦"];
+function autoDeviceName(){
+  const ua = navigator.userAgent || "";
+  const touchMac = /Macintosh/i.test(ua) && Number(navigator.maxTouchPoints) > 1;
+  if(/iPad/i.test(ua) || touchMac) return "iPad";
+  if(/iPhone/i.test(ua)) return "iPhone";
+  if(/Android/i.test(ua)) return /Mobile/i.test(ua) ? "手機" : "平板";
+  if(/Windows/i.test(ua)) return "學校桌機";
+  if(/Mac/i.test(ua)) return "Mac";
+  return "電腦";
+}
 function getDeviceName(){
-  let name = localStorage.getItem("bt_device_name");
-  if(!name){
-    const ua = navigator.userAgent || "";
-    if(/iPad/i.test(ua)) name = "iPad";
-    else if(/iPhone/i.test(ua)) name = "iPhone";
-    else if(/Mac/i.test(ua)) name = "Mac / 電腦";
-    else name = "目前裝置";
-    localStorage.setItem("bt_device_name", name);
+  let name = "";
+  try{ name = localStorage.getItem("bt_device_name") || ""; }catch(e){}
+  const custom = (()=>{ try{ return localStorage.getItem("bt_device_name_custom") === "1"; }catch(e){ return false; } })();
+  if(!name || (!custom && DEVICE_NAME_OLD_AUTO.includes(name))){
+    name = autoDeviceName();
+    try{ localStorage.setItem("bt_device_name", name); }catch(e){}
   }
   return name;
+}
+function setDeviceName(v){
+  const name = String(v || "").trim().slice(0, 20);
+  try{
+    if(name){ localStorage.setItem("bt_device_name", name); localStorage.setItem("bt_device_name_custom", "1"); }
+    else{ localStorage.removeItem("bt_device_name"); localStorage.removeItem("bt_device_name_custom"); }
+  }catch(e){}
+  showToast?.(`這台裝置名稱：${getDeviceName()}`);
+  return getDeviceName();
 }
 
 
@@ -14085,6 +14105,10 @@ function renderBasicSettings(){
       <div class="row forgot-settings">
         ${forgotItems().map(it=>`<div class="f3"><label>${it.icon} ${it.name} 扣點</label><input type="number" min="0" value="${forgotPointFor(it.id)}" onchange="state.settings.forgotPoints={...(state.settings.forgotPoints||{}),${it.id}:Math.abs(Number(this.value)||0)}; saveState()"></div>`).join("")}
         <div class="f3"><label>常忘帶提醒（本學期幾次）</label><input type="number" min="1" value="${forgotAlertThreshold()}" onchange="state.settings.forgotAlert=Math.max(1,Number(this.value)||3); saveState()"></div>
+      </div>
+      <div class="row device-name-setting">
+        <div class="f4"><label>📱 這台裝置名稱</label><input id="deviceNameInput" maxlength="20" value="${escapeHtml(getDeviceName())}" placeholder="${escapeHtml(autoDeviceName())}" onchange="this.value=setDeviceName(this.value)"></div>
+        <div class="f8 note" style="align-self:end">上傳時會記下這個名稱，別台就會看到「雲端有較新資料（${escapeHtml(getDeviceName())} 今天 14:32）」。只存在這台裝置，每台各自設定；清空會恢復自動判斷。</div>
       </div>
       <hr>
       <h3>⭐ 上課介面點數按鈕</h3>

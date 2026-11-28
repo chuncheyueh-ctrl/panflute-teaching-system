@@ -113,4 +113,30 @@ ok("常用動作做完都會顯示尚未上傳",Object.values(a10.out).every(v=>
 ok("課程紀錄內容沒變時不算修改",a10.same===false,a10);
 ok("通過升級不再出錯、有記錄",a10.out.通過升級===true&&/pass/.test(a10.passLog),a10);
 
-console.log("errs",P.errs,I.errs,N.errs,"fails",fail);done(fail||P.errs.length||I.errs.length||N.errs.length?1:0);
+// 11. 裝置名稱：Windows 叫「學校桌機」、自稱 Mac 的 iPad 叫「iPad」；舊的自動名稱會更新，自己取的名字保留；設定中心可以改
+const WIN="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const IPAD="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+const D=await device("new.html",{w:1366,h:900});
+await D.send("Emulation.setUserAgentOverride",{userAgent:WIN});
+const d1=await D.ev(`localStorage.setItem("bt_device_name","目前裝置");localStorage.removeItem("bt_device_name_custom");return getDeviceName()`);
+const d2=await D.ev(`localStorage.removeItem("bt_device_name");return getDeviceName()`);
+const d3=await D.ev(`localStorage.setItem("bt_device_name","Mac / 電腦");return getDeviceName()`);
+await D.send("Emulation.setUserAgentOverride",{userAgent:IPAD});await D.send("Emulation.setTouchEmulationEnabled",{enabled:true,maxTouchPoints:5});
+const d4=await D.ev(`localStorage.setItem("bt_device_name","Mac / 電腦");return getDeviceName()`);
+await D.send("Emulation.setTouchEmulationEnabled",{enabled:false});
+const d5=await D.ev(`localStorage.removeItem("bt_device_name");return getDeviceName()`);
+ok("Windows 自動叫「學校桌機」，舊的「目前裝置」也會更新",d1==="學校桌機"&&d2==="學校桌機",{d1,d2});
+ok("自稱 Mac 的 iPad 叫「iPad」，真的 Mac 叫「Mac」",d4==="iPad"&&d5==="Mac"&&d3!=="Mac / 電腦",{d3,d4,d5});
+await D.send("Emulation.setUserAgentOverride",{userAgent:WIN});
+const d6=JSON.parse(await D.ev(`localStorage.removeItem("bt_device_name");hideDeviceLockWarning?.();document.querySelector('.nav button[data-page="settings"]').click();${W}400${E}settingsTab="basic";renderSettings?.();${W}300${E}
+const inp=document.getElementById("deviceNameInput");const shown=inp?.value;inp.value="音樂教室電腦";inp.dispatchEvent(new Event("change"));
+const a=getDeviceName();localStorage.setItem("bt_device_name","目前裝置");const kept=getDeviceName();
+setDeviceName("");const reset=getDeviceName();setDeviceName("音樂教室電腦");await firebaseUploadAll(true,true);
+return JSON.stringify({shown,a,kept,reset})`));
+await D.ev(`document.getElementById("deviceNameInput")?.scrollIntoView({block:"center"})`);await D.shot("sy-device");
+const n11=JSON.parse(await N.ev(`await quietCloudCheck(true);${W}500${E}return JSON.stringify({s:${status},box:${box}})`));
+ok("設定中心顯示並可改名；清空恢復自動判斷",d6.shown==="學校桌機"&&d6.a==="音樂教室電腦"&&d6.reset==="學校桌機",d6);
+ok("自己取的名字不會被自動判斷蓋掉",d6.kept==="目前裝置",d6);
+ok("別台提醒顯示自訂名稱",/音樂教室電腦/.test(n11.s)&&/音樂教室電腦/.test(n11.box),n11);
+
+console.log("errs",P.errs,I.errs,N.errs,D.errs,"fails",fail);done(fail||P.errs.length||I.errs.length||N.errs.length||D.errs.length?1:0);
