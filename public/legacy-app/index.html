@@ -861,6 +861,18 @@ input[type="date"]{
 .upload-reminder-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
 .upload-reminder-actions .btn{width:auto;padding:6px 12px;font-size:13px}
 .cloud-newer-notice{border-color:#4a86c8;background:#f2f8ff;color:#1f4f82}
+.safety-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.term-summary-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.term-summary th{white-space:nowrap}
+.term-summary td{white-space:nowrap}
+.term-summary td.term-feedback{white-space:normal;min-width:220px;font-size:13px;color:var(--muted)}
+.safety-row{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.6)}
+.safety-row .btn{width:auto;flex:0 0 auto;white-space:nowrap}
+.safety-main{min-width:0}
+.safety-reason{display:inline-block;margin-left:8px;padding:2px 9px;border-radius:999px;background:#eef4ff;color:#2d65b0;font-size:12px;font-weight:800}
+.safety-sum{font-size:12px;color:var(--muted);margin-top:3px}
+body.dark-mode .safety-row{background:#2c2818}
+body.dark-mode .safety-reason{background:#1d2b3a;color:#cfe3ff}
 .cloud-newer-notice .cloud-newer-sub{font-weight:700;font-size:13px;opacity:.85;margin-top:2px}
 body.dark-mode .cloud-newer-notice{background:#1d2b3a;color:#cfe3ff;border-color:#4a86c8}
 body.start-class-mode .cloud-newer-notice{top:auto;bottom:150px;right:16px}
@@ -6886,8 +6898,42 @@ function persistMain(){
 }
 function persistMainNow(){
   if(persistMainTimer){ clearTimeout(persistMainTimer); persistMainTimer = null; }
-  BTMainStore.save(JSON.stringify(state)).catch(()=>{}); /* 失敗時 BTMainStore 會提示 */
+  BTMainStore.save(serializeStateForSave()).catch(()=>{}); /* 失敗時 BTMainStore 會提示 */
 }
+/* 2026-11-28：資料只要有變就自動標成「尚未上傳」
+   以前要每個功能自己呼叫 markDirty，很多地方漏了（點名、設定中心、兌換…），
+   改了資料狀態列卻一直顯示已同步，使用者以為不用上傳。
+   現在存檔時順便比對：同步紀錄（backupMeta）和 __ 開頭的內部欄位以外，內容跟上次存的不同就標記。
+   存檔本來就要轉成文字，只是把同步紀錄分開轉，不會多花時間。 */
+let __stateBodyBase = null, __stateBodyRebase = false;
+function serializeStateForSave(){
+  const raw = JSON.stringify(state);
+  try{ noteStateBody(stateFingerprint()); }catch(e){ console.warn(e); }
+  return raw;
+}
+/* 比對用的內容：不含同步紀錄（backupMeta）、__ 內部欄位、課程紀錄（lessonRecords 有自己的即時同步），
+   也不管空白值（""、[]、{}）：雲端存檔會把空白丟掉，讀取後各頁面又會補回來，這不算使用者修改 */
+function stateFingerprint(){
+  let s = JSON.stringify(state, function(k, v){
+    if(this === state && (k === "backupMeta" || k === "lessonRecords" || k.startsWith("__"))) return undefined;
+    if(v === "" || v === null) return undefined;
+    if(Array.isArray(v)){ if(!v.length) return undefined; }
+    else if(v && typeof v === "object"){ for(const _ in v) return v; return undefined; }
+    return v;
+  }) || "";
+  /* 子欄位都是空白的物件會變成 {}，一併拿掉 */
+  let prev;
+  do{ prev = s; s = s.replace(/"[^"\\]*":(\{\}|\[\])/g, "").replace(/,(?=[,}\]])/g, "").replace(/([{\[]),/g, "$1"); }while(s !== prev);
+  return s;
+}
+function noteStateBody(body){
+  if(__stateBodyBase === null || __stateBodyRebase){ __stateBodyBase = body; __stateBodyRebase = false; return; }
+  if(body === __stateBodyBase) return;
+  __stateBodyBase = body;
+  try{ if(typeof markDirty === "function" && syncStatus && typeof syncStatus === "object") markDirty("資料異動"); }catch(e){}
+}
+/* 讀取雲端／還原後整份換掉：下一次存檔當成新的比對基準，不算本機修改 */
+function rebaseStateBody(){ __stateBodyRebase = true; }
 
 
 /* =========================================================
@@ -6919,6 +6965,8 @@ async function firebaseUploadAll(silent=false, force=false) {
     state.backupMeta.lastLocalChangeAt = state.backupMeta.lastFirebaseUploadAt;
     state.backupMeta.lastLocalChangeMs = state.backupMeta.lastFirebaseUploadMs;
 
+    let uploadedFp = null;
+    try{ uploadedFp = stateFingerprint(); }catch(e){}
     const payload = {
       updatedAt: Date.now(),
       updatedAtText: localIsoLikeString(),
@@ -6928,6 +6976,8 @@ async function firebaseUploadAll(silent=false, force=false) {
     clearPendingSyncInfo(payload.state.backupMeta);
 
     await firebaseDb.ref("battleSystem/main").set(payload);
+    /* 上傳的內容就是新的比對基準；上傳前還沒存檔的修改不會在上傳後被誤判成新修改 */
+    if(uploadedFp !== null) __stateBodyBase = uploadedFp;
     state.backupMeta.cloudBaseMs = payload.updatedAt;
     await writeCloudHistory(payload);
 
@@ -6935,6 +6985,8 @@ async function firebaseUploadAll(silent=false, force=false) {
     syncStatus.cloudIsNewer = false;
     hideCloudWarning?.();
     markClean();
+    /* 上傳途中又改了東西（網路慢時常見）：那筆沒有傳上去，要維持「尚未上傳」 */
+    try{ if(uploadedFp !== null && stateFingerprint() !== uploadedFp){ __stateBodyBase = stateFingerprint(); markDirty("上傳期間的修改"); } }catch(e){}
     render();
     if(!silent) showToast("雲端上傳成功");
     return true;
@@ -7041,6 +7093,7 @@ async function restoreCloudHistory(key){
     const data = snap.val();
     if(!data || !data.state) return alert("這一版備份格式錯誤。");
 
+    if(!(await createLocalSafetyBackup("before-cloud-history-restore"))) return alert("無法先備份目前資料，已停止還原，目前資料沒有變動。");
     const before = state;
     const restored = migrateState(data.state);
     restored.backupMeta = JSON.parse(JSON.stringify(before.backupMeta || {}));
@@ -7078,7 +7131,8 @@ async function firebaseDownloadAll() {
       const ok = confirm("這台裝置還有尚未上傳雲端的修改。\n讀取雲端會直接蓋掉這些本機修改（會先自動做一份本機安全備份）。\n\n確定要放棄本機修改、改用雲端版本嗎？\n不確定的話請按「取消」，先按「⬆️ 上傳雲端」把本機修改存上去。");
       if (!ok) return;
     }
-    try{ createLocalSafetyBackup("before-download-overwrite"); }catch(e){}
+    let safetyId = null;
+    try{ safetyId = createLocalSafetyBackup("before-download-overwrite"); }catch(e){}
 
     syncStatus.syncing = true;
     syncStatus.lastError = "";
@@ -7121,7 +7175,9 @@ async function firebaseDownloadAll() {
     render();
 
     renderSyncStatus();
-    showToast("雲端讀取成功");
+    const sid = await Promise.resolve(safetyId).catch(()=>null);
+    if(typeof sid === "string") showToast("雲端讀取成功", {ms:8000, actionLabel:"復原", onAction:()=>restoreSafetyBackup(sid)});
+    else showToast("雲端讀取成功");
   } catch (err) {
     console.error("Firebase download failed:", err);
     syncStatus.syncing = false;
@@ -7141,7 +7197,7 @@ let state = loadState();
   get(){ return state; },
   set(next){ if(next && typeof next === "object") state = next; }
 }));
-BTMainStore.snapshot = ()=>Array.isArray(state?.students) ? JSON.stringify(state) : null;
+BTMainStore.snapshot = ()=>Array.isArray(state?.students) ? serializeStateForSave() : null;
 ["pagehide","visibilitychange"].forEach(type=>(type === "pagehide" ? window : document).addEventListener(type,()=>{
   if(type === "visibilitychange" && document.visibilityState !== "hidden") return;
   try{ window.LessonSync?.flush(); }catch(e){}
@@ -7344,6 +7400,8 @@ function replaceWholeState(next, mode="keep"){
     else delete state.backupMeta.cloudBaseMs;
   }
   try{ window.LessonSync?.afterReplace(before, mode); }catch(e){ console.warn(e); }
+  /* 讀取雲端：換完的內容當成新基準；主動還原備份則照常算本機修改（需要上傳） */
+  if(mode !== "restore") try{ rebaseStateBody(); }catch(e){}
 }
 
 function ensureBackupMeta(){
@@ -7480,7 +7538,7 @@ const BT_SNAPSHOT_PREFIX = "ST150_SNAPSHOT_";
 const BTBackupStore = {
   dbName:"bt_backup_store",
   storeName:"kv",
-  safetyKeep:5,
+  safetyKeep:10,
   _dbPromise:null,
   openTimeoutMs:8000,
   _safetyQueue:Promise.resolve(),
@@ -7649,18 +7707,84 @@ function createLocalSafetyBackup(reason="manual-force-upload"){
     return Promise.resolve(false);
   }
   /* state 已在上面同步複製好，之後被覆蓋也不影響這份備份 */
-  return BTBackupStore.mergeSafetyBackups([entry]).then(()=>true).catch(err=>{
+  return BTBackupStore.mergeSafetyBackups([entry]).then(()=>entry.id).catch(err=>{
     console.warn("createLocalSafetyBackup: IndexedDB 失敗，改存 localStorage", err);
     try{
       const backups = JSON.parse(localStorage.getItem(BT_SAFETY_BACKUP_KEY) || "[]");
       backups.unshift(entry);
       localStorage.setItem(BT_SAFETY_BACKUP_KEY, JSON.stringify(backups.slice(0,BTBackupStore.safetyKeep)));
-      return true;
+      return entry.id;
     }
     catch(e){ console.warn("createLocalSafetyBackup failed", e); return false; }
   });
 }
 
+
+/* 2026-11-28：大動作前的自動備份，可在「設定中心 → 備份」或動作完成的提示上一鍵還原 */
+const SAFETY_REASON_TEXT = {
+  "before-download-overwrite":"讀取雲端前",
+  "force-use-local-before-upload":"強制上傳本機前",
+  "before-snapshot-restore":"還原本機快照前",
+  "before-cloud-history-restore":"還原雲端歷史版本前",
+  "before-import":"匯入備份檔前",
+  "before-redeem-backfill":"全部補扣前",
+  "before-safety-restore":"還原自動備份前"
+};
+async function listSafetyBackupsAll(){
+  let list = [];
+  try{ list = await BTBackupStore.listSafetyBackups(); }catch(e){}
+  if(typeof list === "string"){ try{ list = JSON.parse(list); }catch(e){ list = []; } }
+  let ls = [];
+  try{ ls = JSON.parse(localStorage.getItem(BT_SAFETY_BACKUP_KEY) || "[]"); }catch(e){}
+  const seen = new Set();
+  return [...(Array.isArray(list) ? list : []), ...(Array.isArray(ls) ? ls : [])]
+    .filter(b=>b && b.id && b.state && !seen.has(b.id) && seen.add(b.id))
+    .sort((a,b)=>String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+}
+function safetySummaryText(st){
+  const c = cloudStateSummary(st);
+  return `學生 ${c.students}｜點名 ${c.attendance}｜點數紀錄 ${c.pointLogs}｜成長 ${c.growthLogs}`;
+}
+async function renderSafetyBackupList(){
+  const box = document.getElementById("safetyBackupList");
+  if(!box) return;
+  const list = await listSafetyBackupsAll();
+  if(!document.body.contains(box)) return;
+  box.innerHTML = list.length ? `
+    <div class="safety-list">
+      ${list.map(b=>`
+        <div class="safety-row" data-safety-id="${escapeHtml(b.id)}">
+          <div class="safety-main">
+            <b>${escapeHtml(safeFormatDateTime(b.createdAt))}</b>
+            <span class="safety-reason">${escapeHtml(SAFETY_REASON_TEXT[b.reason] || b.reason || "自動備份")}</span>
+            <div class="safety-sum">${escapeHtml(safetySummaryText(b.state))}</div>
+          </div>
+          <button class="btn" onclick="restoreSafetyBackup('${escapeHtml(b.id)}')">↩️ 還原這一份</button>
+        </div>`).join("")}
+    </div>` : `<div class="note">目前還沒有自動備份。讀取雲端、匯入、補扣之類的動作執行前會自動存一份。</div>`;
+}
+async function restoreSafetyBackup(id, opt={}){
+  const list = await listSafetyBackupsAll();
+  const b = list.find(x=>x.id === id);
+  if(!b){ alert("找不到這份備份。"); return false; }
+  const label = `${safeFormatDateTime(b.createdAt)}（${SAFETY_REASON_TEXT[b.reason] || b.reason || "自動備份"}）`;
+  if(!opt.skipConfirm && !confirm(`要還原 ${label} 的備份嗎？\n\n目前資料：${safetySummaryText(state)}\n備份內容：${safetySummaryText(b.state)}\n\n還原會換掉這台裝置目前的資料（會先把目前資料也備份一份）。`)) return false;
+  if(!(await createLocalSafetyBackup("before-safety-restore"))){ alert("無法先備份目前資料，已停止還原，目前資料沒有變動。"); return false; }
+  const restored = migrateState(JSON.parse(JSON.stringify(b.state)));
+  /* 回到當時的同步狀態：雲端如果之後有更新，上傳會被擋下來，不會蓋掉別台的資料 */
+  replaceWholeState(restored, "restore");
+  ensureBackupMeta();
+  saveState();
+  try{ markDirty("還原備份"); }catch(e){}
+  syncStatus.cloudIsNewer = false;
+  try{ hideCloudWarning(); }catch(e){}
+  render();
+  renderSyncStatus();
+  try{ quietCloudCheck(true); }catch(e){}
+  showToast(`已還原 ${label} 的資料。確認沒問題再按「⬆️ 上傳雲端」。`, {ms:6000});
+  renderSafetyBackupList();
+  return true;
+}
 
 async function forceUseLocalAndUpload(){
   hideCloudWarning?.();
@@ -11306,6 +11430,92 @@ function renderForgotStatsCard(students, scopeLabel){
     </section>
   `;
 }
+/* 2026-11-28：期末學生摘要（打成績、寫評語用） */
+let termSummaryTermId = "";
+function inTerm(rec, termId){
+  if(!rec) return false;
+  if(rec.termId) return rec.termId === termId;
+  const d = rec.date || rec.createdAt || rec.at;
+  if(!d) return false;
+  try{ return currentAcademicTermId(d) === termId; }catch(e){ return false; }
+}
+function termSummaryRows(students, termId){
+  const ids = new Set(students.map(s=>s.id));
+  const by = list => { const m = new Map(); (list || []).forEach(x=>{ if(x && ids.has(x.studentId) && inTerm(x, termId)){ if(!m.has(x.studentId)) m.set(x.studentId, []); m.get(x.studentId).push(x); } }); return m; };
+  const att = by(state.attendance), pts = by(state.pointLogs), xp = by(state.growthLogs), red = by(state.redeemLogs), ex = by(state.examLogs);
+  return students.map(st=>{
+    const a = att.get(st.id) || [];
+    const cnt = k => a.filter(r=>r.status === k).length;
+    const p = pts.get(st.id) || [];
+    const g = xp.get(st.id) || [];
+    const r = red.get(st.id) || [];
+    const e = ex.get(st.id) || [];
+    const fc = forgotCounts(st.id, termId);
+    const feedback = g.slice().sort((x,y)=>String(y.date||"").localeCompare(String(x.date||"")))
+      .map(x=>String(x.feedback || "").trim()).filter(t=>t && !/^開始上課/.test(t) && !/^XP 修正/.test(t));
+    return {
+      student:st,
+      total:a.length, present:cnt("present"), late:cnt("late"), leave:cnt("leave"), absent:cnt("absent"),
+      rate:a.length ? Math.round(cnt("present") / a.length * 100) : null,
+      earned:p.reduce((s,x)=>s + Math.max(0, Number(x.amount)||0), 0),
+      spent:p.reduce((s,x)=>s + Math.min(0, Number(x.amount)||0), 0),
+      balance:Number(state.points?.[st.id]) || 0,
+      xp:g.reduce((s,x)=>s + (Number(x.xp)||0), 0),
+      forgot:fc.total || 0,
+      redeemCount:r.length, redeemNames:r.map(x=>x.rewardName || "獎品"),
+      passCount:e.filter(x=>x.type === "pass").length,
+      level:levelLabel(st),
+      feedback:[...new Set(feedback)].slice(0,3)
+    };
+  });
+}
+function renderTermSummaryCard(students, scopeLabel){
+  const termId = termSummaryTermId || classContext.termId || currentAcademicTermId();
+  const rows = termSummaryRows(students, termId);
+  const avg = (f)=>{ const v = rows.map(f).filter(x=>x !== null); return v.length ? Math.round(v.reduce((s,x)=>s+x,0)/v.length) : "-"; };
+  return `
+    <section class="card col-12 term-summary">
+      <h3>🧾 學期摘要｜${escapeHtml(scopeLabel)}</h3>
+      <div class="row">
+        <div class="f4"><label>學期</label>
+          <select onchange="termSummaryTermId=this.value; render()">${optionList(activeTerms(), termId)}</select>
+        </div>
+      </div>
+      <div class="forgot-stats-actions"><button class="btn" onclick="tableCopy('termSummaryTable')">📋 複製表格（可貼到 Excel／Google 試算表）</button></div>
+      <div class="note">共 ${rows.length} 位學生｜平均出席率 ${avg(r=>r.rate)}%｜平均獲得點數 ${avg(r=>r.earned)}｜平均 XP ${avg(r=>r.xp)}。出席率＝出席÷點名次數（遲到、請假另列）；點數、XP、兌換只算這學期，「目前點數」是現在的餘額。</div>
+      ${rows.length ? `
+      <div class="term-summary-wrap">
+        <table class="table" id="termSummaryTable">
+          <tr><th>學生</th><th>班級</th><th>出席率</th><th>出席</th><th>遲到</th><th>請假</th><th>缺席</th><th>獲得點數</th><th>使用點數</th><th>目前點數</th><th>XP</th><th>忘帶</th><th>兌換</th><th>升級</th><th>目前等級</th><th>老師回饋（最近 3 則）</th></tr>
+          ${rows.map(r=>`
+            <tr>
+              <td><b>${escapeHtml(r.student.name)}</b></td>
+              <td>${escapeHtml(studentClassNames(r.student.id))}</td>
+              <td class="${r.rate !== null && r.rate < 80 ? "forgot-hot" : ""}">${r.rate === null ? "－" : r.rate + "%"}</td>
+              <td>${r.present}/${r.total}</td><td>${r.late || ""}</td><td>${r.leave || ""}</td><td class="${r.absent >= 3 ? "forgot-hot" : ""}">${r.absent || ""}</td>
+              <td>${r.earned ? "+" + r.earned : ""}</td><td>${r.spent || ""}</td><td><b>${r.balance}</b></td>
+              <td>${r.xp || ""}</td>
+              <td class="${r.forgot >= forgotAlertThreshold() ? "forgot-hot" : ""}">${r.forgot || ""}</td>
+              <td title="${escapeHtml(r.redeemNames.join("、"))}">${r.redeemCount ? `${r.redeemCount}（${escapeHtml(r.redeemNames.join("、"))}）` : ""}</td>
+              <td>${r.passCount || ""}</td>
+              <td>${escapeHtml(r.level)}</td>
+              <td class="term-feedback">${escapeHtml(r.feedback.join("；"))}</td>
+            </tr>`).join("")}
+        </table>
+      </div>` : `<div class="note">這個範圍沒有學生。</div>`}
+    </section>`;
+}
+function tableCopy(tableId){
+  const table = document.getElementById(tableId);
+  if(!table) return showToast("沒有可以複製的資料");
+  const text = [...table.rows].map(tr=>[...tr.cells].map(td=>td.innerText.replace(/\s+/g," ").trim()).join("\t")).join("\n");
+  const fallback = ()=>{
+    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); showToast("已複製表格"); }catch(e){ alert("複製失敗，請手動選取表格"); }
+    ta.remove();
+  };
+  try{ navigator.clipboard.writeText(text).then(()=>showToast("已複製表格"), fallback); }catch(e){ fallback(); }
+}
 function forgotStatsCopy(){
   const table = document.getElementById("forgotStatsTable");
   if(!table) return showToast("沒有可以複製的資料");
@@ -13546,6 +13756,7 @@ function renderStats(){
       <button class="${statsTab==='attendance'?'active':''}" onclick="statsTab='attendance'; render()">出席率排名</button>
       <button class="${statsTab==='rewards'?'active':''}" onclick="statsTab='rewards'; render()">兌換統計</button>
       <button class="${statsTab==='forgot'?'active':''}" onclick="statsTab='forgot'; render()">🎒 忘帶統計</button>
+      <button class="${statsTab==='summary'?'active':''}" onclick="statsTab='summary'; render()">🧾 學期摘要</button>
       <button class="${statsTab==='logs'?'active':''}" onclick="statsTab='logs'; render()">操作紀錄</button>
     </div>
 
@@ -13639,6 +13850,7 @@ function renderStats(){
       ` : ""}
 
       ${statsTab==='forgot' ? renderForgotStatsCard(students, scopeLabel) : ""}
+      ${statsTab==='summary' ? renderTermSummaryCard(students, scopeLabel) : ""}
       ${statsTab==='logs' ? `
         <section class="card col-12">
           <h3>📝 最近操作紀錄</h3>
@@ -15385,6 +15597,12 @@ function renderBackupSettings(){
     </section>
 
     <section class="card">
+      <h3>🛟 大動作前的自動備份</h3>
+      <div class="note">讀取雲端、強制上傳、還原、匯入、全部補扣之前，系統會自動把當下的資料存一份（保留最近 ${BTBackupStore.safetyKeep} 份，只存在這台裝置）。按錯了可以從這裡還原。</div>
+      <div id="safetyBackupList"><div class="note">讀取中…</div></div>
+    </section>
+
+    <section class="card">
       <h3>🛡️ 本機自動快照</h3>
       <div id="snapshotPanelBox"></div>
     </section>
@@ -15410,6 +15628,7 @@ function renderBackupSettings(){
     </section>
   `;
   renderSnapshotPanel();
+  try{ renderSafetyBackupList(); }catch(e){}
 }
 
 
@@ -15432,9 +15651,11 @@ function importBackup(file){
   const reader = new FileReader();
   reader.onload = () => {
     try{
-      replaceWholeState(migrateState(JSON.parse(reader.result)), "restore");
+      const next = migrateState(JSON.parse(reader.result));
+      createLocalSafetyBackup("before-import");
+      replaceWholeState(next, "restore");
       saveState();
-      showToast("匯入完成");
+      showToast("匯入完成（匯入前的資料已自動備份，可在下方「大動作前的自動備份」還原）", {ms:6000});
       render();
     }catch(err){
       alert("匯入失敗，請確認檔案格式");
@@ -24684,6 +24905,8 @@ ST160_StateGuard.install();
     const msg = `確定補扣 ${audit.students.length} 位學生、${audit.undeducted.length} 筆兌換，共 ${audit.total} 點？\n\n${lines.join("\n")}`
       + (negative ? `\n\n注意：有 ${negative} 位學生補扣後會變成負點數。` : "");
     if(!confirm(msg)) return;
+    let safetyId = null;
+    try{ safetyId = createLocalSafetyBackup("before-redeem-backfill"); }catch(e){}
     for(const log of audit.undeducted){
       const cost = numberPoint(log.cost ?? log.points);
       if(cost) adjustStudentPointsCore(log.studentId, -cost, `補扣兌換：${log.rewardName || "獎品"}`, {render:false});
@@ -24693,7 +24916,10 @@ ST160_StateGuard.install();
     }
     try{ if(typeof saveState === "function") saveState(); }catch(e){}
     try{ if(typeof markDirty === "function") markDirty("補扣兌換點數"); }catch(e){}
-    showToast(`已補扣 ${audit.undeducted.length} 筆、共 ${audit.total} 點`);
+    Promise.resolve(safetyId).catch(()=>null).then(sid=>{
+      if(typeof sid === "string") showToast(`已補扣 ${audit.undeducted.length} 筆、共 ${audit.total} 點`, {ms:8000, actionLabel:"復原", onAction:()=>restoreSafetyBackup(sid)});
+      else showToast(`已補扣 ${audit.undeducted.length} 筆、共 ${audit.total} 點`);
+    });
     try{ if(typeof renderRewards === "function") renderRewards(); else renderAfterPointChange(); }catch(e){ renderAfterPointChange(); }
   };
 

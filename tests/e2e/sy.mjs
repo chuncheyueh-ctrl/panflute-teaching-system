@@ -1,4 +1,4 @@
-import {start,device,sleep} from "./lib.mjs"; const done=await start(); setTimeout(()=>{console.log("TIMEOUT");done(1)},150000);
+import {start,device,sleep} from "./lib.mjs"; const done=await start(); setTimeout(()=>{console.log("TIMEOUT");done(1)},200000);
 let fail=0;const ok=(n,c,x="")=>{console.log(c?"PASS":"FAIL",n,c?"":JSON.stringify(x));if(!c)fail++};
 /* 同步狀態看得到：桌機上傳後，一直開著的 iPad 要自己知道「雲端有較新資料」（以前要手動按檢查，畫面一直顯示已同步）；
    不自動讀取、不自動上傳；這台有未上傳修改時不能讓人一鍵蓋掉 */
@@ -139,4 +139,41 @@ ok("設定中心顯示並可改名；清空恢復自動判斷",d6.shown==="學�
 ok("自己取的名字不會被自動判斷蓋掉",d6.kept==="目前裝置",d6);
 ok("別台提醒顯示自訂名稱",/音樂教室電腦/.test(n11.s)&&/音樂教室電腦/.test(n11.box),n11);
 
-console.log("errs",P.errs,I.errs,N.errs,D.errs,"fails",fail);done(fail||P.errs.length||I.errs.length||N.errs.length||D.errs.length?1:0);
+// 12. 設定中心等所有修改都會自動標成尚未上傳（存檔時比對內容）；只是瀏覽頁面不算
+const browse=`for(const b of document.querySelectorAll('.nav button[data-page]')){b.click();await new Promise(r=>setTimeout(r,250))}
+document.querySelector('.nav button[data-page="settings"]').click();
+for(const t of ["basic","schools","terms","classes","students","levels","fields","growth","curriculum","modes","schedule","backup"]){settingsTab=t;try{renderSettings()}catch(e){}await new Promise(r=>setTimeout(r,120))}
+enterStartClassMode();await new Promise(r=>setTimeout(r,1200));exitStartClassMode?.();await new Promise(r=>setTimeout(r,600));
+document.querySelector('.nav button[data-page="classroom"]').click();await new Promise(r=>setTimeout(r,800));BTMainStore.flush?.();`;
+const S12=await device("new.html",{w:1366,h:900});
+await S12.ev(`hideDeviceLockWarning?.();localStorage.setItem("bt_device_name","學校桌機");${browse}await firebaseUploadAll(true,true);`);
+const T12=await device("new.html",{w:1180,h:820});
+const t12=JSON.parse(await T12.ev(`hideDeviceLockWarning?.();await firebaseDownloadAll();${W}800${E}const a=syncStatus.dirty;${browse}${W}600${E}
+const b=syncStatus.dirty;return JSON.stringify({a,b,s:${status}})`));
+ok("讀取雲端後瀏覽各頁、進出上課，不會變成尚未上傳",!t12.a&&!t12.b&&/已同步/.test(t12.s),t12);
+const t12r=JSON.parse(await (async()=>{await T12.go();return T12.ev(`${W}1500${E}return JSON.stringify({dirty:syncStatus.dirty})`)})());
+ok("重新整理後仍是已同步",t12r.dirty===false,t12r);
+const s12=JSON.parse(await S12.ev(`document.querySelector('.nav button[data-page="settings"]').click();${W}400${E}settingsTab="basic";renderSettings();${W}300${E}
+const out={};const chk=async(k,f)=>{markClean();${W}350${E}try{await f()}catch(e){out[k]="EX "+e.message;return}${W}500${E}BTMainStore.flush?.();out[k]=syncStatus.dirty};
+await chk("出席點數",()=>{const i=[...document.querySelectorAll("#settingsBody input")].find(x=>x.closest("div")?.innerText.includes("出席點數"));i.value="2";i.dispatchEvent(new Event("change"))});
+await chk("新增點數按鈕",()=>{document.getElementById("newPointActionName").value="認真練習";addPointAction()});
+const st=studentsByClass(classContext.classId);
+await chk("移出班級",()=>toggleEnrollment(st[0].id,classContext.classId,false));
+await chk("刪除學生",()=>deleteStudent(st[1].id));
+await chk("新增課程日期",()=>addClassDate(classContext.termId,classContext.classId,"2026-12-01"));
+await chk("直接改資料沒呼叫任何標記",()=>{state.settings.systemName="排笛教室";saveState()});
+markClean();${W}350${E}const n0=syncStatus.dirty;
+return JSON.stringify({out,n0})`));
+ok("設定中心各種修改都會顯示尚未上傳",Object.values(s12.out).every(v=>v===true),s12.out);
+ok("沒改東西時維持已同步",s12.n0===false,s12);
+// 13. 上傳途中又改了東西：上傳完成後仍是尚未上傳；剛改完（還沒存檔）就上傳，上傳後不會被誤判
+const s13=JSON.parse(await S12.ev(`const sid=studentsByClass(classContext.classId)[0]?.id||state.students[0].id;
+state.settings.systemName="上傳前剛改";saveState();const up1=await firebaseUploadAll(true,true);${W}900${E}const a=syncStatus.dirty;
+const ref=firebaseDb.ref("battleSystem/main");const oset=ref.set;const orig=firebaseDb.ref;
+firebaseDb.ref=function(p){const r=orig.call(this,p);if(p==="battleSystem/main"){const s=r.set;r.set=async v=>{state.settings.systemName="上傳途中改的";saveState();return s.call(r,v)}}return r};
+const up2=await firebaseUploadAll(true,true);firebaseDb.ref=orig;${W}900${E}
+return JSON.stringify({up1,up2,a,b:syncStatus.dirty})`));
+ok("剛改完就上傳：上傳後是已同步",s13.up1===true&&s13.a===false,s13);
+ok("上傳途中又改：上傳後仍是尚未上傳",s13.up2===true&&s13.b===true,s13);
+
+console.log("errs",P.errs,I.errs,N.errs,D.errs,S12.errs,T12.errs,"fails",fail);done(fail||P.errs.length||I.errs.length||N.errs.length||D.errs.length||S12.errs.length||T12.errs.length?1:0);
