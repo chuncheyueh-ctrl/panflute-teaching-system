@@ -7360,6 +7360,8 @@ if(syncStatus.dirty){
   setTimeout(()=>{
     if(!syncStatus.dirty) return;
     const last = state.backupMeta?.lastLocalChangeAt;
+    const stale = typeof staleUploadMessage === "function" ? staleUploadMessage() : "";
+    if(stale){ try{ __storageGuard.lastStaleRemind = Date.now(); }catch(e){} showUploadReminder(stale); return; }
     showUploadReminder(`這台裝置還有修改沒上傳雲端${last ? `（最後修改：${safeFormatDateTime(last)}）` : ""}。確認資料沒問題後，記得上傳。`);
   }, 2500);
 }
@@ -8244,6 +8246,106 @@ if(typeof firebase !== "undefined" && typeof firebaseDb !== "undefined"){
   window.addEventListener("pageshow", wake);
   window.addEventListener("focus", wake);
 }
+
+/* =========================================================
+   下課提醒上傳 + 本機資料保護
+   - 離開上課模式時，如果還有沒上傳的變更，提醒一次
+   - 向瀏覽器申請保留資料；太久沒上傳時加強提醒
+   ========================================================= */
+const STALE_UPLOAD_DAYS = 3;
+function unsyncedDays(){
+  if(!syncStatus?.dirty) return 0;
+  const since = Number(state.backupMeta?.dirtySinceMs || state.backupMeta?.lastLocalChangeMs || 0);
+  return since ? Math.floor((Date.now() - since) / 86400000) : 0;
+}
+function staleUploadMessage(){
+  const days = unsyncedDays();
+  if(days < STALE_UPLOAD_DAYS) return "";
+  const n = syncPendingCount();
+  return `這台裝置有${n ? ` ${n} 筆` : ""}修改已經 ${days} 天沒上傳雲端。iPad 或手機太久沒打開這個網頁時，瀏覽器可能會清掉沒上傳的資料，建議現在上傳。`;
+}
+function remindUploadAfterClass(){
+  if(!syncStatus?.dirty || syncStatus.syncing) return false;
+  if(document.body.classList.contains("start-class-mode")) return false;
+  /* 雲端有較新資料時直接上傳會被擋，改顯示「雲端有較新資料」的處理方式，兩個提醒不疊在一起 */
+  if(syncStatus.cloudIsNewer){ hideUploadReminder(); showCloudNewerNotice(true); return true; }
+  const n = syncPendingCount();
+  showUploadReminder(`下課了！這堂課有${n ? ` ${n} 筆` : ""}變更還沒上傳雲端，上傳後別台裝置才看得到。`);
+  return true;
+}
+(function watchStartClassExit(){
+  let wasIn = document.body?.classList.contains("start-class-mode") || false, timer = null;
+  const check = ()=>{
+    const now = document.body.classList.contains("start-class-mode");
+    if(wasIn && !now){
+      clearTimeout(timer);
+      /* 「儲存並結束課堂」會先上傳；等它跑完再看還有沒有沒上傳的 */
+      timer = setTimeout(function wait(){
+        if(syncStatus?.syncing || syncStatus?.checking){ timer = setTimeout(wait, 800); return; }
+        remindUploadAfterClass();
+      }, 900);
+    }
+    if(now) clearTimeout(timer);
+    wasIn = now;
+  };
+  try{ new MutationObserver(check).observe(document.body, {attributes:true, attributeFilter:["class"]}); }catch(e){}
+})();
+
+const __storageGuard = {persisted:null, asked:false, lastStaleRemind:0};
+function isStandaloneApp(){
+  try{ return !!(window.matchMedia?.("(display-mode: standalone)")?.matches || navigator.standalone); }catch(e){ return false; }
+}
+function isAppleMobile(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+async function ensureStoragePersist(){
+  try{
+    if(!navigator.storage?.persisted) return null;
+    let ok = await navigator.storage.persisted();
+    if(!ok && navigator.storage.persist && !__storageGuard.asked){
+      __storageGuard.asked = true;
+      ok = await navigator.storage.persist();
+    }
+    __storageGuard.persisted = !!ok;
+    return __storageGuard.persisted;
+  }catch(e){ return null; }
+}
+function remindStaleUpload(){
+  const msg = staleUploadMessage();
+  if(!msg || syncStatus.syncing) return false;
+  if(Date.now() - __storageGuard.lastStaleRemind < 6 * 3600000) return false;
+  if(syncStatus.cloudIsNewer || document.getElementById("cloudNewerBox")) return false;
+  __storageGuard.lastStaleRemind = Date.now();
+  showUploadReminder(msg);
+  return true;
+}
+function storageProtectHtml(){
+  const p = __storageGuard.persisted;
+  const pText = p === true ? "✅ 已開啟（瀏覽器會盡量保留這台的資料）"
+    : p === false ? "⚠️ 瀏覽器沒有答應（太久沒打開時，資料可能被清掉）"
+    : "這個瀏覽器不支援";
+  const app = isStandaloneApp();
+  const last = state.backupMeta?.lastFirebaseUploadAt ? safeFormatDateTime(state.backupMeta.lastFirebaseUploadAt) : "尚未上傳";
+  const days = unsyncedDays();
+  const tip = isAppleMobile() && !app ? `
+      <div class="note storage-tip">📱 建議把這個網頁「加入主畫面」，之後從主畫面的圖示打開，iPad 比較不會清掉資料。<br>
+      做法：Safari 按「分享」→「加入主畫面」。<br>
+      注意：主畫面的 App 和 Safari 分頁的資料是分開的。加入前，先在這裡「上傳雲端」；從主畫面打開後登入，再「讀取雲端」。</div>` : "";
+  return `
+      <div class="note storage-status">
+        保留資料：${escapeHtml(pText)}<br>
+        開啟方式：${app ? "主畫面 App" : "瀏覽器分頁"}<br>
+        上次上傳雲端：${escapeHtml(last)}${syncStatus.dirty ? `（目前有修改還沒上傳${days >= 1 ? `，已經 ${days} 天` : ""}）` : ""}
+      </div>${tip}
+      <div class="note">最保險的做法：每次上完課都「上傳雲端」。雲端有的資料，就算這台被清掉也救得回來。</div>`;
+}
+async function refreshStorageProtectBox(){
+  await ensureStoragePersist();
+  const box = document.getElementById("storageProtectBox");
+  if(box) box.innerHTML = storageProtectHtml();
+}
+setTimeout(()=>{ ensureStoragePersist(); }, 1500);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "visible") setTimeout(remindStaleUpload, 1200); });
 
 
 
@@ -15597,6 +15699,11 @@ function renderBackupSettings(){
     </section>
 
     <section class="card">
+      <h3>📱 這台裝置的資料保護</h3>
+      <div id="storageProtectBox">${storageProtectHtml()}</div>
+    </section>
+
+    <section class="card">
       <h3>🛟 大動作前的自動備份</h3>
       <div class="note">讀取雲端、強制上傳、還原、匯入、全部補扣之前，系統會自動把當下的資料存一份（保留最近 ${BTBackupStore.safetyKeep} 份，只存在這台裝置）。按錯了可以從這裡還原。</div>
       <div id="safetyBackupList"><div class="note">讀取中…</div></div>
@@ -15629,6 +15736,7 @@ function renderBackupSettings(){
   `;
   renderSnapshotPanel();
   try{ renderSafetyBackupList(); }catch(e){}
+  try{ refreshStorageProtectBox(); }catch(e){}
 }
 
 
